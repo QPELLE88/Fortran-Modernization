@@ -1,13 +1,7 @@
 models
-- search is more flexible (LOWER function)
+- cool images for marsupial search
 
 views
-- spacing, commas, multiple params
-- HTML escaping
-- cool images for marsupial search
+- HTML escaping of template values
 - spaces, commas, dots, hashes in attributes
-
-docs
-- testing?
-- refresher / update
-- figure out how to get the sqlite c file in place
+- self-closing tags (hr, br, input) are emitted with a closing tag

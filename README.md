@@ -1,6 +1,47 @@
 # Fortran.io
 
-An MVC web stack written in Fortran 90 (so you get arrays, and it's not punchcards)
+An MVC web stack written in modern Fortran (2018) — so you get arrays, modules and allocatable strings, and it's not punchcards.
+
+## Quick start (Docker)
+
+```
+docker build -t fortran-io .
+docker run --rm -p 8080:8080 fortran-io
+```
+
+Then open http://localhost:8080 — nginx serves `/static` and forwards everything else to the Fortran FastCGI worker.
+
+## Project layout
+
+```
+app/fortran_fcgi.f90    FastCGI accept loop (program entry point)
+src/controller.f90      routes: /, /test, /search, /all
+src/jade.f90            Jade/HAML-like template renderer
+src/marsupial.f90       SQLite model (marsupial_t rows)
+src/string_helpers.f90  string utilities (replace_all, sql_quote, ...)
+test/test_suite.f90     unit tests
+test/smoke.sh           end-to-end FastCGI smoke test
+template/               Jade templates
+static/                 static docs served by nginx
+deploy/                 nginx config + container entrypoint
+flibs-0.9/              vendored FLIBS (SQLite and FastCGI bindings)
+```
+
+## Building and testing
+
+Requires `gfortran`, `make`, `libsqlite3-dev`, `libfcgi-dev` (and `spawn-fcgi` + `libfcgi-bin` for the smoke test).
+Objects and `.mod` files go to `build/`; the binary is `./fortran_fcgi`.
+
+```
+make                     # optimized build
+make DEBUG=1 WERROR=1    # bounds/pointer checks, backtraces, warnings as errors
+make test                # unit tests (templates, model, controller)
+make smoke               # spawn the server and request every route over FastCGI
+make serve               # spawn-fcgi on 127.0.0.1:9000
+make clean
+```
+
+CI runs the strict build, both test suites and a Docker + nginx check on every pull request.
 
 Major credit due to:
 
@@ -29,7 +70,7 @@ cd ~
 
 # install git and clone the repo
 sudo apt-get install -y git
-git clone https://github.com/mapmeld/fortran-machine.git
+git clone https://github.com/QPELLE88/Fortran-Modernization.git fortran-machine
 
 # Install dependencies
 cd fortran-machine
@@ -114,21 +155,19 @@ sudo service nginx restart
 
 ## Fortran controller
 
-The controller is written in Fortran in the fortran_fcgi.f90 file:
+Routes live in `src/controller.f90`:
 
 ```fortran
+select case (trim(scriptName))
 case ('/')
-	! most pages look like this
-	templatefile = 'template/index.jade'
-	call jadefile(templatefile, unitNo)
-
+  call jadefile('template/index.jade', unit)
 case ('/search')
-	write(unitNo,AFORMAT) '<div class="container">'
-
-	templatefile = 'template/search.jade'
-	call jadefile(templatefile, unitNo)
-
-	write(unitNo,AFORMAT) '</div>'
+  call search_page(dict, unit)
+case ('/all')
+  call all_page(unit)
+case default
+  write(unit, '(a)') 'Page not found!'
+end select
 ```
 
 ## Jade Templates
@@ -146,62 +185,39 @@ If you want to have a loop or other structure, it's better to create a partial a
     a(href="http://example.com/profile/#{id}") A link
 ```
 
+Template variables are passed as an array of `template_var` key/value pairs:
+
+```fortran
+call jadetemplate('template/hello.jade', unit, [ &
+  template_var_of('name', 'Nick'), &
+  template_var_of('id', '42')])
+```
+
 ## SQLite Database
 
 You can connect to a SQLite database. The example on <a href="https://fortran.io">Fortran.io</a>
 lets you search through marsupials!
 
-Here's how the getAllMarsupials subroutine loads data into arrays:
+`src/marsupial.f90` returns rows as a derived type with allocatable strings, so there is no fixed column width or row limit:
 
 ```fortran
-subroutine getAllMarsupials(name, latinName, wikiLink, description)
-	! columns
-	character(len=50), dimension(8)	:: name, latinName, wikiLink, description
+type :: marsupial_t
+  character(len=:), allocatable :: name, latin_name, wiki_link, description
+end type marsupial_t
 
-	call sqlite3_open('marsupials.sqlite3', db)
-
-	allocate( column(4) )
-	call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-	call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-	call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
-	call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
-
-	call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
-
-	i = 1
-	do
-		call sqlite3_next_row(stmt, column, finished)
-		if (finished) exit
-
-		call sqlite3_get_column(column(1), name(i))
-		call sqlite3_get_column(column(2), latinName(i))
-		call sqlite3_get_column(column(3), wikiLink(i))
-		call sqlite3_get_column(column(4), description(i))
-		i = i + 1
-	end do
-endsubroutine
+call find_marsupial(query, found, m)   ! case-insensitive substring match
+call list_marsupials(rows)             ! every row
 ```
 
-Then in the Fortran controller, you loop through:
+User input is escaped with `sql_quote` before it reaches SQLite.
+
+Then in the Fortran controller, you loop through the rows:
 
 ```fortran
-call getAllMarsupials(names, latinNames, wikiLinks, descriptions)
-
-i = 1
-do
-	pagevars(1,2) = names(i)
-	pagevars(2,2) = latinNames(i)
-	pagevars(3,2) = wikiLinks(i)
-	pagevars(4,2) = descriptions(i)
-	if (len(trim(pagevars(1,2))) == 0 .or. i == 5) then
-		exit
-	else
-		! template with string
-		templatefile = 'template/result.jade'
-		call jadetemplate(templatefile, unitNo, pagevars)
-		i = i + 1
-	endif
-enddo
+call list_marsupials(rows)
+do i = 1, size(rows)
+  call jadetemplate('template/result.jade', unit, marsupial_vars(rows(i)))
+end do
 ```
 
 Then the individual result template:
