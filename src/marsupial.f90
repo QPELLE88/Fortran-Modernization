@@ -34,6 +34,9 @@ contains
 
     type(marsupial_t), allocatable :: rows(:)
 
+    found = .false.
+    if (len_trim(query) == 0) return
+
     call select_marsupials( &
       'WHERE INSTR(LOWER(name), LOWER(' // sql_quote(trim(query)) // ')) LIMIT 1', rows)
     found = size(rows) > 0

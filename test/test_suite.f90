@@ -124,6 +124,9 @@ contains
     type(marsupial_t), allocatable :: rows(:)
     logical :: found
 
+    call find_marsupial('   ', found, m)
+    call check(.not. found, 'find_marsupial: blank query matches nothing')
+
     call find_marsupial('KOALA', found, m)
     call check(found, 'find_marsupial: case-insensitive match')
     if (found) then
@@ -183,6 +186,9 @@ contains
 
     page = render('DOCUMENT_URI=/search&q=xyz')
     call check(index(page, 'No results in this database') > 0, 'GET /search?q=xyz: empty state')
+
+    page = render('DOCUMENT_URI=/search')
+    call check(index(page, 'No results in this database') > 0, 'GET /search without q: empty state')
 
     page = render('DOCUMENT_URI=/all')
     call check(index(page, 'koala') > 0 .and. index(page, 'wombat') > 0, 'GET /all: every row')
