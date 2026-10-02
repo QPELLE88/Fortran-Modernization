@@ -64,7 +64,7 @@ module sqlite_types
       integer                 :: type_set
       integer                 :: int_value
       real(kind=dp)           :: double_value
-      character(len=80)       :: char_value
+      character(len=1024)     :: char_value
    end type SQLITE_COLUMN
 end module sqlite_types
 

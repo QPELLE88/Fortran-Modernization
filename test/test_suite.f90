@@ -1,7 +1,7 @@
 !> Unit tests. Run from the repository root (`make test`) so that templates
 !> and the sample database are found.
 program test_suite
-  use string_helpers, only: compact, string_replace, replace_all, sql_quote
+  use string_helpers, only: compact, string_replace, replace_all, sql_quote, html_escape
   use jade, only: template_var, template_var_of, render_jade, jadetemplate
   use marsupial, only: marsupial_t, find_marsupial, list_marsupials
   use cgi_protocol, only: DICT_STRUCT, cgi_store_dict, dict_destroy
@@ -64,6 +64,8 @@ contains
     call check_equal(replace_all('abc', '', 'y'), 'abc', 'replace_all: empty pattern')
     call check_equal(replace_all('#{a}#{a}', '#{a}', ''), '', 'replace_all: to empty')
     call check_equal(sql_quote("o'brien"), "'o''brien'", 'sql_quote: doubles quotes')
+    call check_equal(html_escape('<a href="x">&''</a>'), &
+      '&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;', 'html_escape: special characters')
 
     fixed = 'a.b.c'
     call string_replace(fixed, '.', ' ')
@@ -77,6 +79,8 @@ contains
   subroutine test_jade()
     character(len=:), allocatable :: html
     character(len=*), parameter :: nested = 'build/test_nested.jade'
+    character(len=200) :: line
+    integer :: u
 
     call write_file(nested, [character(len=40) :: &
       'ul.list', &
@@ -88,6 +92,23 @@ contains
       '<ul id="" class=" list"><li id="first" class="">one</li><li id="" class="">two' // &
       '</li></ul><p id="" class="">after</p>', &
       'render_jade: nesting, siblings and closing every tag at EOF')
+
+    call write_file(nested, [character(len=40) :: &
+      'a(href="/") one', &
+      '', &
+      'a(href="/") two'])
+    call render_jade(nested, html=html)
+    call check_equal(html, '<a href="/" id="" class="">one</a><a href="/" id="" class="">two</a>', &
+      'render_jade: blank lines keep closing tags')
+
+    call write_file(nested, [character(len=40) :: 'p #{v}'])
+    open(newunit=u, status='scratch')
+    call jadetemplate(nested, u, [template_var_of('v', '<script>')])
+    rewind(u)
+    read(u, '(a)') line
+    close(u)
+    call check(index(line, '<p id="" class="">&lt;script&gt;</p>') > 0, &
+      'jadetemplate: escapes values')
 
     call render_jade('template/does-not-exist.jade', html=html)
     call check_equal(html, '<!-- template not found: template/does-not-exist.jade -->', &

@@ -15,7 +15,7 @@ module marsupial
 
   character(len=*), parameter :: MARSUPIAL_DB = 'marsupials.sqlite3'
   character(len=*), parameter :: TABLE = 'marsupials'
-  integer, parameter :: FIELD_LEN = 80
+  integer, parameter :: FIELD_LEN = 1024
 
   type :: marsupial_t
     character(len=:), allocatable :: name

@@ -4,7 +4,7 @@
 !> expressed through indentation. `#{key}` placeholders are substituted by
 !> `jadetemplate`.
 module jade
-  use string_helpers, only: compact, string_replace, replace_all
+  use string_helpers, only: compact, string_replace, replace_all, html_escape
 
   implicit none
   private
@@ -47,7 +47,7 @@ contains
   end subroutine jadefile
 
   !> Renders the template at `path` as a single line to `unit`, substituting
-  !> every `#{key}` from `vars`.
+  !> every `#{key}` from `vars` with its HTML-escaped value.
   subroutine jadetemplate(path, unit, vars)
     character(len=*), intent(in) :: path
     integer, intent(in) :: unit
@@ -58,7 +58,7 @@ contains
 
     call render_jade(path, html=html)
     do i = 1, size(vars)
-      html = replace_all(html, '#{' // vars(i)%key // '}', vars(i)%value)
+      html = replace_all(html, '#{' // vars(i)%key // '}', html_escape(vars(i)%value))
     end do
     write(unit, '(a)') html
   end subroutine jadetemplate
@@ -92,6 +92,7 @@ contains
     do
       read(templater, '(a)', iostat=io) inputLine
       if (io /= 0) exit
+      if (len_trim(inputLine) == 0) cycle
 
       spaceless = trim(inputLine)
       call compact(spaceless)

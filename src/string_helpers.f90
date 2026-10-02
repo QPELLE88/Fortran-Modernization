@@ -9,6 +9,7 @@ module string_helpers
   public :: string_replace
   public :: replace_all
   public :: sql_quote
+  public :: html_escape
 
 contains
 
@@ -111,5 +112,17 @@ contains
 
     res = "'" // replace_all(value, "'", "''") // "'"
   end function sql_quote
+
+  !> Escapes `&`, `<`, `>`, `"` and `'` for use in HTML text and attributes.
+  pure function html_escape(value) result(res)
+    character(len=*), intent(in) :: value
+    character(len=:), allocatable :: res
+
+    res = replace_all(value, '&', '&amp;')
+    res = replace_all(res, '<', '&lt;')
+    res = replace_all(res, '>', '&gt;')
+    res = replace_all(res, '"', '&quot;')
+    res = replace_all(res, "'", '&#39;')
+  end function html_escape
 
 end module string_helpers

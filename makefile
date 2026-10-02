@@ -51,6 +51,13 @@ OBJS := $(FLIBS_OBJS) $(APP_OBJS)
 
 all: $(BIN)
 
+# rebuild every object when the effective flags change (e.g. toggling DEBUG)
+FLAGS_STAMP := $(BUILD)/flags
+FLAGS_LINE  := $(FC) $(FFLAGS) | $(FFLAGS_FLIBS) | $(CC) $(CFLAGS_FLIBS)
+$(FLAGS_STAMP): FORCE | $(BUILD)
+	@echo '$(FLAGS_LINE)' | cmp -s - $@ || echo '$(FLAGS_LINE)' > $@
+$(OBJS) $(BUILD)/fortran_fcgi.o $(BUILD)/test_suite.o: $(FLAGS_STAMP)
+
 $(BIN): $(BUILD)/fortran_fcgi.o $(OBJS)
 	$(FC) $(OPT) -o $@ $^ $(LDLIBS)
 
@@ -96,4 +103,4 @@ serve: $(BIN)
 clean:
 	rm -rf $(BUILD) $(BIN)
 
-.PHONY: all test smoke serve clean
+.PHONY: all test smoke serve clean FORCE
