@@ -37,6 +37,8 @@ expect "GET /search?q=xyz"    'No results in this database'  /search q=xyz
 expect "GET /search?q=o'b"    'No results in this database'  /search 'q=o%27b'
 expect "GET /search?q=%"      '<html>'                       /search 'q=%'
 expect "GET /search"           'No results in this database'  /search
+expect "GET /search?q=x*500"  'No results in this database'  /search "q=$(printf 'x%.0s' {1..500})"
+# QUERY_STRING beyond the 1024-char FastCGI buffer is dropped, so q is missing
 expect "GET /search?q=x*2000" 'No results in this database'  /search "q=$(printf 'x%.0s' {1..2000})"
 expect "GET /all"             'Vombatus ursinus'             /all
 expect "GET /missing"         'Page not found!'              /missing
