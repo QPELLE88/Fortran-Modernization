@@ -61,13 +61,7 @@ h4
 ! open .container
 write(unitNo,AFORMAT) '&lt;div class="container"&gt;'
 
-! use a 2D array for key-value pairs -
-pagevars(1,1) = 'name'
-pagevars(1,2) = 'Nick'
-pagevars(2,1) = 'occupation'
-pagevars(2,2) = 'mapmaker'
-
-! use URL variable ?lang=__ to fill in this variable
+! use URL variable ?lang=__ to pick a template
 call cgi_get(dict, 'lang', language)
 
 if (language == 'english') then
@@ -75,7 +69,11 @@ if (language == 'english') then
 else
   templatefile = 'template/result-spanish.jade'
 endif
-call jadetemplate(templatefile, unitNo, pagevars)
+
+! pass key-value pairs as an array of template_var
+call jadetemplate(templatefile, unitNo, [ &amp;
+  template_var_of('name', 'Nick'), &amp;
+  template_var_of('occupation', 'mapmaker')])
 
 ! close .container
 write(unitNo,AFORMAT) '&lt;/div&gt;'

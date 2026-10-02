@@ -59,29 +59,25 @@ case ('/search')
   call cgi_get(dict, 'q', query)
   call calculate(query)
 </pre>
-        <p>Jade files can also have template strings with each variable in a #{template}. Pass variables using the pagevars 2D array.<p>
+        <p>Jade files can also have template strings with each variable in a #{template}. Pass variables as an array of <code>template_var</code> key/value pairs.<p>
 <pre>
 case ('/profile')
-  pagevars(1,1) = 'name'
-  pagevars(1,2) = 'Nick'
-  templatefile = 'template/profile.jade'
-  call jadetemplate(templatefile, unitNo, pagevars)
+  call jadetemplate('template/profile.jade', unit, &amp;
+    [template_var_of('name', 'Nick')])
 </pre>
         <p>In searches Fortran.io controller gets input from the model and URL variables, and displays it in the view.</p>
 <pre>
 case ('/search')
-  pagevars(1,1) = 'name'
-  pagevars(2,1) = 'latinName'
-  call cgi_get( dict, 'q', query)
-  call getOneMarsupial(query, pagevars(1,2), pagevars(2,2))
+  call cgi_get(dict, 'q', query)
+  call find_marsupial(query, found, m)
 
-  if (len(trim(name)) == 0) then
-    write(unitNo,AFORMAT) '<p>No results in this database :-(</p>'
+  if (.not. found) then
+    write(unit, '(a)') '&lt;p&gt;No results in this database :-(&lt;/p&gt;'
   else
-    ! template with string
-    templatefile = 'template/result.jade'
-    call jadetemplate(templatefile, unitNo, pagevars)
-  endif
+    call jadetemplate('template/result.jade', unit, [ &amp;
+      template_var_of('name', m%name), &amp;
+      template_var_of('latinName', m%latin_name)])
+  end if
 </pre>
       </div>
     </div>

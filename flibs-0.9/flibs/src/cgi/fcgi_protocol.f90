@@ -155,6 +155,8 @@ contains
         character(len=*), intent(in), optional :: mimetype
 
         character(len=80)                      :: mimetype_
+        character(len=:), allocatable          :: line
+        integer                                :: nread
 
         mimetype_ = 'text/html'
         if ( present(mimetype) ) then
@@ -169,11 +171,20 @@ contains
 
         ! copy line by line to webserver, except those starting with %REMARK%
         rewind(unitNo)
+        ! records of any length are read in MAX_CONTENT_LENGTH chunks
         do while (.true.)
-            read(unitNo, AFORMAT, iostat=iStat) content
-            if (iStat < 0) exit ! no more lines
-            if (content(:8) == '%REMARK%') cycle
-            iStat = fcgip_put_string (trim(content)//NUL) ! FCGI_puts expects NULL terminated strings
+            line = ''
+            do
+                read(unitNo, AFORMAT, advance='no', size=nread, iostat=iStat) content
+                if (is_iostat_end(iStat)) exit
+                line = line // content(:nread)
+                if (iStat /= 0) exit ! end of record
+            end do
+            if (is_iostat_end(iStat)) exit ! no more lines
+            if (len(line) >= 8) then
+                if (line(:8) == '%REMARK%') cycle
+            end if
+            iStat = fcgip_put_string (trim(line)//NUL) ! FCGI_puts expects NULL terminated strings
         end do
 
     end subroutine fcgip_put_file

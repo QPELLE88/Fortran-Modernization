@@ -1,50 +1,106 @@
-# vim: noexpandtab: tabstop=4:
+# Fortran.io build
+#
+#   make            build ./fortran_fcgi
+#   make DEBUG=1    build with runtime checks (bounds, pointers, backtraces)
+#   make WERROR=1   treat compiler warnings in app code as errors
+#   make test       run the unit tests
+#   make smoke      start the FastCGI server and exercise every route
+#   make serve      spawn the FastCGI server on 127.0.0.1:9000
+#   make clean
 
-FLIBS=flibs-0.9/flibs/src
-LIBSQLITE3=$(shell find /usr -name libsqlite3.a -print -quit)
+ifeq ($(origin FC),default)
+FC = gfortran
+endif
+CC ?= cc
 
-FORTRAN=gfortran
-FORTRANFLAGS=-ldl -lfcgi -pthread -Wl,-rpath -Wl,/usr/lib
+BUILD   := build
+FLIBS   := flibs-0.9/flibs/src
+BIN     := fortran_fcgi
+TESTBIN := $(BUILD)/test_suite
 
-ifndef $(LIBSQLITE3)
-FORTRANFLAGS=-ldl -lfcgi -lsqlite3 -pthread -Wl,-rpath -Wl,/usr/lib
+ifeq ($(DEBUG),1)
+OPT := -O0 -g -fcheck=all -fbacktrace -ffpe-trap=invalid,zero,overflow
+else
+OPT := -O2
 endif
 
-OBJECTS = \
-	marsupial.o \
-	jade.o \
-	string_helpers.o \
-	fsqlite.o \
-	cgi_protocol.o \
-	fcgi_protocol.o \
-	csqlite.o
+WARN := -Wall -Wextra -Wimplicit-interface -Wno-maybe-uninitialized
+ifeq ($(WERROR),1)
+WARN += -Werror
+endif
 
-fortran_fcgi: fortran_fcgi.f90 $(OBJECTS)
-	$(FORTRAN) -o $@ $^ $(LIBSQLITE3) $(FORTRANFLAGS) 
+MODFLAGS     := -J$(BUILD) -I$(BUILD)
+FFLAGS       := -std=f2018 -fimplicit-none $(WARN) $(OPT) $(MODFLAGS)
+FFLAGS_FLIBS := $(OPT) $(MODFLAGS)
+CFLAGS_FLIBS := -O2 -DLOWERCASE -Wno-discarded-qualifiers -Wno-incompatible-pointer-types
+LDLIBS       := -lfcgi -lsqlite3
 
-marsupial.o: marsupial.f90 string_helpers.o fsqlite.o
-	$(FORTRAN) -c $<
+FLIBS_OBJS := \
+	$(BUILD)/fsqlite.o \
+	$(BUILD)/csqlite.o \
+	$(BUILD)/cgi_protocol.o \
+	$(BUILD)/fcgi_protocol.o
 
-jade.o: jade.f90 string_helpers.o
-	$(FORTRAN) -c $<
+APP_OBJS := \
+	$(BUILD)/string_helpers.o \
+	$(BUILD)/jade.o \
+	$(BUILD)/marsupial.o \
+	$(BUILD)/controller.o
 
-string_helpers.o: string_helpers.f90
-	$(FORTRAN) -c $<
+OBJS := $(FLIBS_OBJS) $(APP_OBJS)
 
-fsqlite.o: $(FLIBS)/sqlite/fsqlite.f90
-	$(FORTRAN) -c $<
+all: $(BIN)
 
-cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90
-	$(FORTRAN) -c $<
+# rebuild every object when the effective flags change (e.g. toggling DEBUG)
+FLAGS_STAMP := $(BUILD)/flags
+FLAGS_LINE  := $(FC) $(FFLAGS) | $(FFLAGS_FLIBS) | $(CC) $(CFLAGS_FLIBS)
+$(FLAGS_STAMP): FORCE | $(BUILD)
+	@echo '$(FLAGS_LINE)' | cmp -s - $@ || echo '$(FLAGS_LINE)' > $@
+$(OBJS) $(BUILD)/fortran_fcgi.o $(BUILD)/test_suite.o: $(FLAGS_STAMP)
 
-fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90
-	$(FORTRAN) -c $<
+$(BIN): $(BUILD)/fortran_fcgi.o $(OBJS)
+	$(FC) $(OPT) -o $@ $^ $(LDLIBS)
 
-csqlite.o: $(FLIBS)/sqlite/csqlite.c
-	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
-	cp $(FLIBS)/sqlite/csqlite.o . 
+$(TESTBIN): $(BUILD)/test_suite.o $(OBJS)
+	$(FC) $(OPT) -o $@ $^ $(LDLIBS)
+
+$(BUILD):
+	mkdir -p $@
+
+# vendored FLIBS
+$(BUILD)/fsqlite.o: $(FLIBS)/sqlite/fsqlite.f90 | $(BUILD)
+	$(FC) $(FFLAGS_FLIBS) -c $< -o $@
+$(BUILD)/cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90 | $(BUILD)
+	$(FC) $(FFLAGS_FLIBS) -c $< -o $@
+$(BUILD)/fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90 $(BUILD)/cgi_protocol.o | $(BUILD)
+	$(FC) $(FFLAGS_FLIBS) -c $< -o $@
+$(BUILD)/csqlite.o: $(FLIBS)/sqlite/csqlite.c | $(BUILD)
+	$(CC) $(CFLAGS_FLIBS) -c $< -o $@
+
+# application
+$(BUILD)/%.o: src/%.f90 | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+$(BUILD)/fortran_fcgi.o: app/fortran_fcgi.f90 | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+$(BUILD)/test_suite.o: test/test_suite.f90 | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+
+$(BUILD)/jade.o: $(BUILD)/string_helpers.o
+$(BUILD)/marsupial.o: $(BUILD)/string_helpers.o $(BUILD)/fsqlite.o
+$(BUILD)/controller.o: $(BUILD)/jade.o $(BUILD)/marsupial.o $(BUILD)/fcgi_protocol.o
+$(BUILD)/fortran_fcgi.o: $(BUILD)/controller.o $(BUILD)/fcgi_protocol.o
+$(BUILD)/test_suite.o: $(BUILD)/controller.o $(BUILD)/fcgi_protocol.o
+
+test: $(TESTBIN)
+	./$(TESTBIN)
+
+smoke: $(BIN)
+	./test/smoke.sh
+
+serve: $(BIN)
+	spawn-fcgi -a 127.0.0.1 -p 9000 ./$(BIN)
 
 clean:
-	rm -f -v fortran_fcgi *.o *.mod $(FLIBS)/sqlite/*.o
+	rm -rf $(BUILD) $(BIN)
 
-.PHONY: clean
+.PHONY: all test smoke serve clean FORCE

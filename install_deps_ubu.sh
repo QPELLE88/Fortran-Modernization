@@ -24,4 +24,4 @@ ensure_install()
 }
 
 apt-get update
-ensure_install gfortran make sqlite3 libsqlite3-dev nginx libfcgi-dev spawn-fcgi
+ensure_install gfortran make sqlite3 libsqlite3-dev nginx libfcgi-dev libfcgi-bin spawn-fcgi
