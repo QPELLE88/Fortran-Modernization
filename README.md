@@ -1,141 +1,125 @@
 # Fortran.io
 
-An MVC web stack written in Fortran 90 (so you get arrays, and it's not punchcards)
+An MVC web stack written in modern Fortran (2018): FastCGI controllers,
+Jade-style HTML templates and a SQLite model layer, served behind nginx.
 
 Major credit due to:
 
-- authors of <a href="http://fortranwiki.org/fortran/show/FLIBS">FLIBS</a> (Arjen Markus and Michael Baudin)
+- authors of <a href="http://fortranwiki.org/fortran/show/FLIBS">FLIBS</a> (Arjen Markus and Michael Baudin), which earlier versions of this project were built on
 - Ricolindo Carino and Arjen Markus's Fortran FastCGI program and tutorial - in many ways this started as an update to this tutorial :  http://flibs.sourceforge.net/fortran-fastcgi-nginx.html
 - String utils by George Benthian http://www.gbenthien.net/strings/index.html
 - <a href="https://github.com/branning">Philip Branning</a> for improving and documenting the install process, especially the SQLite parts
 - <a href="https://github.com/divVerent">divVerent</a> for fixing a server crash bug due to URL params and SQL
 
-## Create an Ubuntu server
-
-Log in and install dependencies
+## Layout
 
 ```
-# update Ubuntu
-sudo apt-get update
-sudo apt-get upgrade
-
-# create the user and home directory
-adduser fortran --gecos ""
-usermod -a -G sudo fortran
-
-# switch to new user
-su fortran
-cd ~
-
-# install git and clone the repo
-sudo apt-get install -y git
-git clone https://github.com/mapmeld/fortran-machine.git
-
-# Install dependencies
-cd fortran-machine
-sudo ./install_deps_ubu.sh
+app/fortran_fcgi.f90    FastCGI entry point: reads the CGI environment, dispatches, writes the response
+src/app.f90             controller / routes (/, /test, /search, /all, /healthz)
+src/marsupial.f90       model: queries marsupials.sqlite3 with prepared statements
+src/jade.f90            Jade-style template renderer (HTML-escapes #{...} by default)
+src/http.f90            request/response types, query-string parsing, URL decoding
+src/database.f90        thin ISO_C_BINDING wrapper over libsqlite3
+src/fcgi.f90            ISO_C_BINDING interface to libfcgi
+src/string_helpers.f90  string utilities
+template/               .jade templates
+static/                 static files served directly by nginx
+test/                   unit tests (test_suite.f90) and HTTP smoke test (smoke.sh)
+deploy/                 nginx config + entrypoint used by the Docker image
 ```
 
-Go to your IP address - you should see the "Welcome to nginx!" page
-
-Change the location in /etc/nginx/sites-available/default :
+## Quick start (Docker)
 
 ```
-server_name 101.101.101.101; <- your IP address
+docker build -t fortran-io .
+docker run --rm -p 8080:8080 fortran-io
+# open http://localhost:8080
+```
 
-location / {
-	root /home/fortran/fortran-machine;
-	index index.html;
+The image compiles the app, runs the unit tests, and serves it with nginx +
+spawn-fcgi as an unprivileged user. `GET /healthz` returns `ok`.
+
+## Building from source
+
+Requirements: a Fortran 2008+ compiler (gfortran 11 or newer is tested), make,
+the SQLite and FastCGI development libraries, and nginx + spawn-fcgi to serve.
+
+```
+sudo ./install_deps_ubu.sh   # or install_deps_arch.sh / install_deps_osx.sh
+
+make          # builds ./fortran_fcgi
+make test     # builds and runs the unit tests
+make smoke    # serves the app through a throwaway nginx and checks every route
+```
+
+The build uses `-std=f2018 -Wall -Wextra -Wimplicit-interface -fimplicit-none`.
+Extra flags can be passed with `FFLAGS`, e.g. runtime checks and sanitizers:
+
+```
+make test FFLAGS="-O0 -g -fcheck=all -fsanitize=address,undefined"
+```
+
+## Serving with nginx
+
+Point nginx at the checkout and forward dynamic requests to FastCGI, e.g. in
+`/etc/nginx/sites-available/default`:
+
+```
+server {
+  listen 80;
+  root /home/fortran/fortran-machine;
+
+  location /static/ { }
+
+  location / {
+    include fastcgi_params;
+    fastcgi_pass 127.0.0.1:9000;
+  }
 }
 ```
 
-Restart nginx to make these settings for real:
+Then restart nginx and spawn the server from the repository root (templates
+and the database are resolved relative to the working directory):
 
 ```
 sudo service nginx restart
+spawn-fcgi -a 127.0.0.1 -p 9000 -d "$(pwd)" -- ./fortran_fcgi
 ```
 
-You should now see the test page on your IP address.
+After changing the source code, rebuild and respawn with `./restart.sh`.
 
-```
-Test doc
-```
-
-## Use Fortran CGI script
-
-Let's go from test page to Fortran script:
-
-```
-# compile the test server
-make
-```
-
-Now change nginx config /etc/nginx/sites-available/default
-
-```
-location / {
-	root /home/fortran/fortran-machine;
-	fastcgi_pass 127.0.0.1:9000;
-	fastcgi_index index.html;
-	include fastcgi_params;
-}
-```
-
-Then run ```sudo service nginx restart```
-
-```
-# spawn the server
-spawn-fcgi -a 127.0.0.1 -p 9000 ./fortran_fcgi
-```
-
-### Restarting the script
-
-After changing the source code, you can recompile and restart your server with:
-
-```
-./restart.sh
-```
-
-## Add a static folder
-
-Add to nginx config /etc/nginx/sites-available/default
-
-```
-location /static {
-    root /home/fortran/fortran-machine;
-}
-```
-
-And restart nginx
-
-```
-sudo service nginx restart
-```
+`deploy/nginx.conf` is a complete, self-contained example. Don't forget an
+HTTPS certificate, e.g. from Let's Encrypt.
 
 ## Fortran controller
 
-The controller is written in Fortran in the fortran_fcgi.f90 file:
+Routes live in `src/app.f90`. Each handler renders HTML into `content`, which
+is wrapped in a shared layout and returned in a `response_t`:
 
 ```fortran
+select case (path)
 case ('/')
-	! most pages look like this
-	templatefile = 'template/index.jade'
-	call jadefile(templatefile, unitNo)
-
+  call jade_render_file(TEMPLATE_DIR // 'index.jade', content, ok)
 case ('/search')
-	write(unitNo,AFORMAT) '<div class="container">'
-
-	templatefile = 'template/search.jade'
-	call jadefile(templatefile, unitNo)
-
-	write(unitNo,AFORMAT) '</div>'
+  call search_page(get_param(req, 'q'), content, ok)
+case ('/all')
+  call all_page(content, ok)
+case ('/healthz')
+  res%content_type = 'text/plain; charset=utf-8'
+  res%body = 'ok'
+  return
+case default
+  res%status = 404
+  ...
+end select
 ```
+
+`app/fortran_fcgi.f90` builds the `request_t` (method, path, GET query string
+and URL-encoded POST body) and writes the `Status`/`Content-Type` headers.
 
 ## Jade Templates
 
 In the template folder, you can write HTML templates similar to Jade or HAML.
-
-If you want to have a loop or other structure, it's better to create a partial and run the loop in the Fortran controller.
 
 ```jade
 .container
@@ -143,85 +127,53 @@ If you want to have a loop or other structure, it's better to create a partial a
     h3 Hello #{name}!
   .col-sm-6
     h3 Link
-    a(href="http://example.com/profile/#{id}") A link
+    a.btn.btn-link(href="http://example.com/profile/#{id}", target="_blank") A link
+    | plain text line
 ```
+
+Supported: `tag.class#id(attr="value", other='x') text`, implicit `div` for
+`.class`/`#id`, nesting by indentation, void elements (`input`, `br`, ...),
+and `| text` lines. `#{key}` values are HTML-escaped; use `!{key}` for
+trusted, pre-rendered HTML.
+
+Variables are passed as `key_value_t` pairs:
+
+```fortran
+type(key_value_t) :: vars(2)
+vars(1)%key = 'name'
+vars(1)%value = item%name
+vars(2)%key = 'wikiLink'
+vars(2)%value = item%wiki_link
+call jade_render_file('template/result.jade', html, ok, vars=vars)
+```
+
+If you want a loop, render a partial per item in the controller.
 
 ## SQLite Database
 
-You can connect to a SQLite database. The example on <a href="https://fortran.io">Fortran.io</a>
-lets you search through marsupials!
-
-Here's how the getAllMarsupials subroutine loads data into arrays:
-
-```fortran
-subroutine getAllMarsupials(name, latinName, wikiLink, description)
-	! columns
-	character(len=50), dimension(8)	:: name, latinName, wikiLink, description
-
-	call sqlite3_open('marsupials.sqlite3', db)
-
-	allocate( column(4) )
-	call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-	call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-	call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
-	call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
-
-	call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
-
-	i = 1
-	do
-		call sqlite3_next_row(stmt, column, finished)
-		if (finished) exit
-
-		call sqlite3_get_column(column(1), name(i))
-		call sqlite3_get_column(column(2), latinName(i))
-		call sqlite3_get_column(column(3), wikiLink(i))
-		call sqlite3_get_column(column(4), description(i))
-		i = i + 1
-	end do
-endsubroutine
-```
-
-Then in the Fortran controller, you loop through:
+The example on <a href="https://fortran.io">Fortran.io</a> lets you search
+through marsupials! `src/marsupial.f90` uses prepared statements, so user input
+is always bound as data:
 
 ```fortran
-call getAllMarsupials(names, latinNames, wikiLinks, descriptions)
-
-i = 1
-do
-	pagevars(1,2) = names(i)
-	pagevars(2,2) = latinNames(i)
-	pagevars(3,2) = wikiLinks(i)
-	pagevars(4,2) = descriptions(i)
-	if (len(trim(pagevars(1,2))) == 0 .or. i == 5) then
-		exit
-	else
-		! template with string
-		templatefile = 'template/result.jade'
-		call jadetemplate(templatefile, unitNo, pagevars)
-		i = i + 1
-	endif
-enddo
+call db%prepare('SELECT ' // COLUMNS // ' FROM marsupials ' // &
+                'WHERE INSTR(LOWER(name), LOWER(?1)) > 0 ORDER BY rowid LIMIT 1', stmt, rc)
+if (rc == SQLITE_OK) rc = stmt%bind_text(1, trim(query))
+if (rc == SQLITE_OK) then
+  if (stmt%step() == SQLITE_ROW) then
+    found = .true.
+    item%name = stmt%column_text(0)
+    ...
+  end if
+end if
+call stmt%finalize()
+call db%close()
 ```
 
-Then the individual result template:
-
-```jade
-.row
-  .col-sm-12
-    h4
-      a(href="https://en.wikipedia.org#{wikiLink}") #{name}
-    em #{latinName}
-    hr
-    p #{description}
-```
-
-## HTTPS Certificate
-
-Don't forget to get a free HTTPS Certificate using LetsEncrypt!
-
-https://www.digitalocean.com/community/tutorials/how-to-secure-nginx-with-let-s-encrypt-on-ubuntu-14-04
+`list_marsupials(items, ok, limit)` returns an allocatable array of
+`marsupial_t` that the controller loops over, rendering `template/result.jade`
+for each one.
 
 # License
 
-This library, like FLIBS which it's based on, is available under the BSD license
+This library is available under the BSD license (see LICENSE).
