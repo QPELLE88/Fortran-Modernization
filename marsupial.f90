@@ -20,11 +20,20 @@ module marsupial
   function wikiArticle(wikiLink) result(article)
     character(len=*), intent(in)  :: wikiLink
     character(len=:), allocatable :: article
+    character(len=150)            :: segment
 
     if (index(wikiLink, '/wiki/') == 1) then
       article = url_encode(trim(wikiLink(7:)), keepEscapes=.true.)
     else
       article = url_encode(trim(wikiLink), keepEscapes=.true.)
+    endif
+
+    ! browsers resolve '.', '..' (and %2e forms) as dot segments, leaving /wiki/
+    segment = article
+    call string_replace(segment, '%2e', '.')
+    call string_replace(segment, '%2E', '.')
+    if (trim(segment) == '.' .or. trim(segment) == '..') then
+      article = ''
     endif
   endfunction
 
