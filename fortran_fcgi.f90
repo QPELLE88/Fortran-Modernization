@@ -64,7 +64,7 @@ contains
         !character(len=1), parameter :: NUL = achar(0)
 
         ! retrieve params from model and pass them to view
-        character(len=50), dimension(10,2) :: pagevars
+        character(len=150), dimension(10,2) :: pagevars
         character(len=50), dimension(8) :: names, latinNames, wikiLinks, descriptions
 
         ! the script name
@@ -86,6 +86,8 @@ contains
             '<link rel="stylesheet" type="text/css" href="/static/bootstrap.min.css"/>', &
             '</head>', &
             '<body>'
+
+        pagevars = ''
 
         ! retrieve script name (key=DOCUMENT_URI) from dictionary
         call cgi_get( dict, "DOCUMENT_URI", scriptName )

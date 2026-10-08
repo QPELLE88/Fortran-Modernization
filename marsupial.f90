@@ -22,9 +22,9 @@ module marsupial
     character(len=:), allocatable :: article
 
     if (index(wikiLink, '/wiki/') == 1) then
-      article = url_encode(trim(wikiLink(7:)))
+      article = url_encode(trim(wikiLink(7:)), keepEscapes=.true.)
     else
-      article = url_encode(trim(wikiLink))
+      article = url_encode(trim(wikiLink), keepEscapes=.true.)
     endif
   endfunction
 

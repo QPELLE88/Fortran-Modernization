@@ -103,13 +103,19 @@ module string_helpers
   end function html_escape
 
   ! percent-encodes everything except RFC 3986 unreserved characters,
-  ! so the result is safe to use as a single URL path segment
-  function url_encode(str) result(encoded)
+  ! so the result is safe to use as a single URL path segment;
+  ! with keepEscapes, well-formed %XX sequences are passed through unchanged
+  function url_encode(str, keepEscapes) result(encoded)
       character(len=*), intent(in)  :: str
+      logical, intent(in), optional :: keepEscapes
       character(len=:), allocatable :: encoded
 
       character(len=2)              :: hex
+      logical                       :: keep
       integer                       :: i
+
+      keep = .false.
+      if (present(keepEscapes)) keep = keepEscapes
 
       encoded = ''
       do i = 1, len(str)
@@ -117,6 +123,12 @@ module string_helpers
           case ('A':'Z', 'a':'z', '0':'9', '-', '.', '_', '~')
             encoded = encoded // str(i:i)
           case default
+            if (keep .and. str(i:i) == '%' .and. i + 2 <= len(str)) then
+              if (verify(str(i+1:i+2), '0123456789ABCDEFabcdef') == 0) then
+                encoded = encoded // '%'
+                cycle
+              endif
+            endif
             write(hex, '(Z2.2)') iachar(str(i:i))
             encoded = encoded // '%' // hex
         end select
