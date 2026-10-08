@@ -146,6 +146,10 @@ If you want to have a loop or other structure, it's better to create a partial a
     a(href="http://example.com/profile/#{id}") A link
 ```
 
+`#{key}` inserts the value HTML-escaped (`& < > " '`). Use `!{key}` only for trusted HTML that must not be escaped.
+Values are inserted in a single pass, so a value containing `#{...}` is never expanded. Escaping does not
+validate URLs: keep a fixed scheme/host/path prefix in `href` and URL-encode the variable part (see `url_encode`).
+
 ## SQLite Database
 
 You can connect to a SQLite database. The example on <a href="https://fortran.io">Fortran.io</a>
@@ -191,7 +195,7 @@ i = 1
 do
 	pagevars(1,2) = names(i)
 	pagevars(2,2) = latinNames(i)
-	pagevars(3,2) = wikiLinks(i)
+	pagevars(3,2) = wikiArticle(wikiLinks(i))
 	pagevars(4,2) = descriptions(i)
 	if (len(trim(pagevars(1,2))) == 0 .or. i == 5) then
 		exit
@@ -210,7 +214,7 @@ Then the individual result template:
 .row
   .col-sm-12
     h4
-      a(href="https://en.wikipedia.org#{wikiLink}") #{name}
+      a(href="https://en.wikipedia.org/wiki/#{wikiArticle}") #{name}
     em #{latinName}
     hr
     p #{description}

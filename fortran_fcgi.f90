@@ -64,7 +64,7 @@ contains
         !character(len=1), parameter :: NUL = achar(0)
 
         ! retrieve params from model and pass them to view
-        character(len=50), dimension(10,2) :: pagevars
+        character(len=150), dimension(10,2) :: pagevars
         character(len=50), dimension(8) :: names, latinNames, wikiLinks, descriptions
 
         ! the script name
@@ -86,6 +86,8 @@ contains
             '<link rel="stylesheet" type="text/css" href="/static/bootstrap.min.css"/>', &
             '</head>', &
             '<body>'
+
+        pagevars = ''
 
         ! retrieve script name (key=DOCUMENT_URI) from dictionary
         call cgi_get( dict, "DOCUMENT_URI", scriptName )
@@ -109,11 +111,12 @@ contains
 
             pagevars(1,1) = 'name'
             pagevars(2,1) = 'latinName'
-            pagevars(3,1) = 'wikiLink'
+            pagevars(3,1) = 'wikiArticle'
             pagevars(4,1) = 'description'
             query = ''
             call cgi_get( dict, 'q', query)
             call getOneMarsupial(query, pagevars(1,2), pagevars(2,2), pagevars(3,2), pagevars(4,2))
+            pagevars(3,2) = wikiArticle(pagevars(3,2))
 
             if (len(trim(pagevars(1,2))) == 0) then
               write(unitNo,AFORMAT) '<p>No results in this database :-(</p>'
@@ -132,7 +135,7 @@ contains
 
             pagevars(1,1) = 'name'
             pagevars(2,1) = 'latinName'
-            pagevars(3,1) = 'wikiLink'
+            pagevars(3,1) = 'wikiArticle'
             pagevars(4,1) = 'description'
 
             call getAllMarsupials(names, latinNames, wikiLinks, descriptions)
@@ -141,7 +144,7 @@ contains
             do
               pagevars(1,2) = names(i)
               pagevars(2,2) = latinNames(i)
-              pagevars(3,2) = wikiLinks(i)
+              pagevars(3,2) = wikiArticle(wikiLinks(i))
               pagevars(4,2) = descriptions(i)
               if (len(trim(pagevars(1,2))) == 0 .or. i == 5) then
                 exit

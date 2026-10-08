@@ -5,25 +5,67 @@ module jade
 
   contains
 
+  ! Renders a Jade template and fills in placeholders from replacements(:,1) keys.
+  ! #{key} inserts the HTML-escaped value; !{key} inserts it raw (trusted HTML only).
+  ! Substitution is a single pass, so inserted values are never re-scanned.
   subroutine jadetemplate(templatefile, unitNo, replacements)
     character(len=10000)         :: templatefile
-    integer                      :: unitNo, i
+    integer                      :: unitNo, i, n, p, start, keyEnd, escapedAt, rawAt
     character(len=*), dimension(10,2)    :: replacements
     character(len=3)   :: AFORMAT = '(a)'
+    character(len=:), allocatable :: rendered, key
+    logical            :: found
 
     call jadefile(templatefile, 0)
 
-    i = 1
-    do
-      if ((i > 10) .or. (replacements(i,1) == '')) then
-        exit
+    rendered = ''
+    n = len_trim(templatefile)
+    p = 1
+    do while (p <= n)
+      escapedAt = index(templatefile(p:n), '#{')
+      rawAt = index(templatefile(p:n), '!{')
+      if (escapedAt == 0 .or. (rawAt > 0 .and. rawAt < escapedAt)) then
+        start = rawAt
+      else
+        start = escapedAt
+      endif
+      if (start == 0) exit
+      start = p + start - 1
+
+      keyEnd = index(templatefile(start + 2:n), '}')
+      if (keyEnd == 0) exit
+      keyEnd = start + keyEnd
+
+      rendered = rendered // templatefile(p:start - 1)
+      key = templatefile(start + 2:keyEnd)
+
+      found = .false.
+      i = 1
+      do
+        if ((i > 10) .or. (replacements(i,1) == '')) then
+          exit
+        endif
+        if (trim(replacements(i, 1)) == key) then
+          found = .true.
+          if (templatefile(start:start) == '!') then
+            rendered = rendered // trim(replacements(i, 2))
+          else
+            rendered = rendered // html_escape(trim(replacements(i, 2)))
+          endif
+          exit
+        endif
+        i = i + 1
+      enddo
+      if (.not. found) then
+        rendered = rendered // templatefile(start:keyEnd + 1)
       endif
 
-      call string_replace(templatefile, '#{' // trim(replacements(i, 1)) // '}', trim(replacements(i, 2)))
-
-      i = i + 1
+      p = keyEnd + 2
     enddo
-    write(unitNo, AFORMAT) templatefile
+    if (p <= n) then
+      rendered = rendered // templatefile(p:n)
+    endif
+    write(unitNo, AFORMAT) rendered
   endsubroutine
 
   subroutine jadefile(templatefile, unitNo)
