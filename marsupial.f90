@@ -15,6 +15,19 @@ module marsupial
 
   contains
 
+  ! wikiLink is stored as '/wiki/Article'; return only the URL-encoded article
+  ! name so it cannot alter the host or path of the Wikipedia link
+  function wikiArticle(wikiLink) result(article)
+    character(len=*), intent(in)  :: wikiLink
+    character(len=:), allocatable :: article
+
+    if (index(wikiLink, '/wiki/') == 1) then
+      article = url_encode(trim(wikiLink(7:)))
+    else
+      article = url_encode(trim(wikiLink))
+    endif
+  endfunction
+
   ! subroutine insert(name, latinName, wikiLink, description)
     ! columns
     ! character(len=50)             :: name, latinName, wikiLink, description

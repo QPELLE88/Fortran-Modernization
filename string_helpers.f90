@@ -76,4 +76,50 @@ module string_helpers
         endif
       enddo
   end subroutine string_replace
+
+  function html_escape(str) result(escaped)
+      character(len=*), intent(in)  :: str
+      character(len=:), allocatable :: escaped
+
+      integer                       :: i
+
+      escaped = ''
+      do i = 1, len(str)
+        select case (str(i:i))
+          case ('&')
+            escaped = escaped // '&amp;'
+          case ('<')
+            escaped = escaped // '&lt;'
+          case ('>')
+            escaped = escaped // '&gt;'
+          case ('"')
+            escaped = escaped // '&quot;'
+          case ("'")
+            escaped = escaped // '&#39;'
+          case default
+            escaped = escaped // str(i:i)
+        end select
+      enddo
+  end function html_escape
+
+  ! percent-encodes everything except RFC 3986 unreserved characters,
+  ! so the result is safe to use as a single URL path segment
+  function url_encode(str) result(encoded)
+      character(len=*), intent(in)  :: str
+      character(len=:), allocatable :: encoded
+
+      character(len=2)              :: hex
+      integer                       :: i
+
+      encoded = ''
+      do i = 1, len(str)
+        select case (str(i:i))
+          case ('A':'Z', 'a':'z', '0':'9', '-', '.', '_', '~')
+            encoded = encoded // str(i:i)
+          case default
+            write(hex, '(Z2.2)') iachar(str(i:i))
+            encoded = encoded // '%' // hex
+        end select
+      enddo
+  end function url_encode
 endmodule
