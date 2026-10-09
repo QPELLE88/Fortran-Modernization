@@ -82,7 +82,8 @@ set port      8015
 set encoding  iso8859-1
 
 # bgerror --
-#     Handle background errors (echo to the screen and to the client)
+#     Handle background errors (log details locally, send the client
+#     a generic error without any internal details)
 # Arguments:
 #     msg       Error message
 # Result:
@@ -91,10 +92,15 @@ set encoding  iso8859-1
 proc bgerror msg {
     global clientSock
     puts stdout "bgerror: $msg\n$::errorInfo"
-    puts $clientSock "HTTP/1.0 200 OK"
-    puts $clientSock "Content-Type: text/plain;charset=$::encoding\n"
-    puts $clientSock "Processing error: $msg\n$::errorInfo"
-    close $clientSock
+    if { [info exists clientSock] } {
+        catch {
+            puts $clientSock "HTTP/1.0 500 Internal Server Error"
+            puts $clientSock "Content-Type: text/plain;charset=$::encoding\n"
+            puts $clientSock "Internal server error"
+        }
+        catch {close $clientSock}
+        unset clientSock
+    }
 }
 
 # answer --
@@ -160,7 +166,7 @@ proc serve sock {
     set exe 0
     set perm r
     if {[file readable $name]} {
-        puts $sock "HTTP/1.0 200 OK"
+        set html 0
         if {[file extension $name] eq ".tcl"} {
             set ::env(QUERY_STRING) [string range $args 1 end]
             set name [list |tclsh $name]
@@ -169,7 +175,7 @@ proc serve sock {
             set perm w+
             set name [list |$name]
         } else {
-           puts $sock "Content-Type: text/html;charset=$::encoding\n"
+            set html 1
         }
         set inchan [open $name $perm]
         if { $exe } {
@@ -178,6 +184,10 @@ proc serve sock {
             waitForProgram
             close $inchan
             set inchan [open "cgiout"]
+        }
+        puts $sock "HTTP/1.0 200 OK"
+        if { $html } {
+           puts $sock "Content-Type: text/html;charset=$::encoding\n"
         }
 
         #
