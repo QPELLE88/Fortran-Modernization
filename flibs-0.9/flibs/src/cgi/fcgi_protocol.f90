@@ -87,6 +87,7 @@ contains
         integer                           :: i
         integer                           :: iLen
         character(len=1)                  :: ch
+        type(DICT_DATA)                   :: uri
 
         ! write to the beginning of file unitNo
         rewind (unitNo)
@@ -98,18 +99,6 @@ contains
         else
             write(unitNo, AFORMAT) '%REMARK% dictionary NOT associated()...'
         endif
-
-        ! add the requested script ('/' if none) to dictionary
-        call get_environment_variable('DOCUMENT_URI', content)
-        iLen = len_trim(content)
-        if ( iLen > 0 ) then
-            content = 'DOCUMENT_URI='//content
-        else ! default is /, to ensure dictionary is not empty
-            content = 'DOCUMENT_URI=/'
-        endif
-        iLen = len_trim(content)
-        call cgi_store_dict( dict, content(:iLen) )
-        write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//content(:iLen)
 
         ! QUERY_STRING (request method was GET) ?
         call get_environment_variable( "QUERY_STRING", value=content, length=iLen, status=iStat )
@@ -137,6 +126,23 @@ contains
                 write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
             end if
         endif
+
+        ! add the requested script ('/' if none) to dictionary last, so that the
+        ! server-set value replaces any user-supplied DOCUMENT_URI parameter.
+        ! Store it verbatim (no '&' splitting or %xx decoding) so the path itself
+        ! cannot inject another DOCUMENT_URI pair.
+        call get_environment_variable('DOCUMENT_URI', content)
+        if ( len_trim(content) > 0 ) then
+            uri%value = content
+        else ! default is /, to ensure dictionary is not empty
+            uri%value = '/'
+        endif
+        if ( associated(dict) ) then
+            call dict_add_key( dict, 'DOCUMENT_URI', uri )
+        else
+            call dict_create( dict, 'DOCUMENT_URI', uri )
+        endif
+        write(unitNo, AFORMAT) '%REMARK% added to dictionary: DOCUMENT_URI='//trim(uri%value)
 
         ! for other environment variables, see <nginx directory>/conf/fastcgi_params
 
