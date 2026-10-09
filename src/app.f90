@@ -1,7 +1,7 @@
 !> Controller: maps a request to a response. Independent of FastCGI so it can be unit tested.
 module app
   use, intrinsic :: iso_fortran_env, only: error_unit
-  use strings, only: html_escape, starts_with
+  use strings, only: string_t, html_escape, join, starts_with
   use http, only: request_t, response_t, get_param, get_env, html_response, error_response
   use jade, only: template_var_t, tvar, load_template, render_jade, render_template_file
   use marsupials, only: marsupial_t, search_marsupials, all_marsupials
@@ -110,8 +110,9 @@ contains
     type(response_t) :: resp
     character(len=:), allocatable :: header, row_template, html, errmsg
     type(template_var_t), allocatable :: no_vars(:)
+    type(string_t), allocatable :: parts(:)
     logical :: ok
-    integer :: i
+    integer :: i, nparts
 
     allocate(no_vars(0))
     call render_template_file(cfg%template_dir // '/search.jade', no_vars, header, ok, errmsg)
@@ -121,16 +122,20 @@ contains
       return
     end if
 
-    html = '<div class="container">' // new_line('a') // header
-    if (size(rows) == 0) html = html // empty_message // new_line('a')
+    nparts = size(rows) + 3
+    allocate(parts(nparts))
+    parts(1)%s = '<div class="container">' // new_line('a') // header
+    parts(2)%s = ''
+    if (size(rows) == 0) parts(2)%s = empty_message // new_line('a')
     do i = 1, size(rows)
-      html = html // render_jade(row_template, [ &
+      parts(i+2)%s = render_jade(row_template, [ &
         tvar('name', rows(i)%name), &
         tvar('latinName', rows(i)%latin_name), &
         tvar('wikiLink', safe_wiki_path(rows(i)%wiki_link)), &
         tvar('description', rows(i)%description)])
     end do
-    html = html // '</div>'
+    parts(nparts)%s = '</div>'
+    html = join(parts)
     resp = html_response(layout(html))
   end function results_page
 

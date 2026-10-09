@@ -4,7 +4,7 @@ module strings
   private
 
   public :: string_t
-  public :: html_escape, url_decode, replace_all, to_lower, starts_with, int_to_str
+  public :: html_escape, join, url_decode, replace_all, to_lower, starts_with, int_to_str
 
   character(len=1), parameter, public :: LF = achar(10)
   character(len=1), parameter, public :: CR = achar(13)
@@ -19,59 +19,90 @@ contains
   !> Escape a value for safe inclusion in HTML text or a quoted attribute.
   pure function html_escape(s) result(r)
     character(len=*), intent(in) :: s
-    character(len=:), allocatable :: r
-    integer :: i
+    character(len=:), allocatable :: r, e
+    integer :: i, n
 
-    r = ''
+    n = 0
     do i = 1, len(s)
-      select case (s(i:i))
-      case ('&')
-        r = r // '&amp;'
-      case ('<')
-        r = r // '&lt;'
-      case ('>')
-        r = r // '&gt;'
-      case ('"')
-        r = r // '&quot;'
-      case ("'")
-        r = r // '&#39;'
-      case default
-        if (iachar(s(i:i)) < 32 .and. s(i:i) /= achar(9) .and. s(i:i) /= achar(10) &
-            .and. s(i:i) /= achar(13)) then
-          r = r // '&#xFFFD;'
-        else
-          r = r // s(i:i)
-        end if
-      end select
+      e = escape_char(s(i:i))
+      n = n + len(e)
+    end do
+    allocate(character(len=n) :: r)
+    n = 0
+    do i = 1, len(s)
+      e = escape_char(s(i:i))
+      r(n+1:n+len(e)) = e
+      n = n + len(e)
     end do
   end function html_escape
+
+  pure function escape_char(c) result(e)
+    character(len=1), intent(in) :: c
+    character(len=:), allocatable :: e
+
+    select case (c)
+    case ('&')
+      e = '&amp;'
+    case ('<')
+      e = '&lt;'
+    case ('>')
+      e = '&gt;'
+    case ('"')
+      e = '&quot;'
+    case ("'")
+      e = '&#39;'
+    case default
+      if (iachar(c) < 32 .and. c /= achar(9) .and. c /= LF .and. c /= CR) then
+        e = '&#xFFFD;'
+      else
+        e = c
+      end if
+    end select
+  end function escape_char
+
+  !> Concatenate parts in a single allocation.
+  pure function join(parts) result(r)
+    type(string_t), intent(in) :: parts(:)
+    character(len=:), allocatable :: r
+    integer :: i, n
+
+    n = 0
+    do i = 1, size(parts)
+      n = n + len(parts(i)%s)
+    end do
+    allocate(character(len=n) :: r)
+    n = 0
+    do i = 1, size(parts)
+      r(n+1:n+len(parts(i)%s)) = parts(i)%s
+      n = n + len(parts(i)%s)
+    end do
+  end function join
 
   !> Decode application/x-www-form-urlencoded text; malformed escapes are kept verbatim.
   pure function url_decode(s) result(r)
     character(len=*), intent(in) :: s
     character(len=:), allocatable :: r
-    integer :: i, hi, lo
+    character(len=len(s)) :: buf
+    integer :: i, n, hi, lo
 
-    r = ''
+    n = 0
     i = 1
     do while (i <= len(s))
-      if (s(i:i) == '+') then
-        r = r // ' '
-        i = i + 1
-        cycle
-      end if
-      if (s(i:i) == '%' .and. i + 2 <= len(s)) then
-        hi = hex_value(s(i+1:i+1))
-        lo = hex_value(s(i+2:i+2))
+      n = n + 1
+      buf(n:n) = s(i:i)
+      i = i + 1
+      if (s(i-1:i-1) == '+') then
+        buf(n:n) = ' '
+      else if (s(i-1:i-1) == '%' .and. i + 1 <= len(s)) then
+        hi = hex_value(s(i:i))
+        lo = hex_value(s(i+1:i+1))
         if (hi >= 0 .and. lo >= 0) then
-          r = r // char(hi * 16 + lo)
-          i = i + 3
-          cycle
+          buf(n:n) = char(hi * 16 + lo)
+          i = i + 2
         end if
       end if
-      r = r // s(i:i)
-      i = i + 1
     end do
+    r = buf(:n)
   end function url_decode
 
   pure integer function hex_value(c) result(v)
