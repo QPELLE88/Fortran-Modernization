@@ -112,7 +112,7 @@ contains
         write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//content(:iLen)
 
         ! QUERY_STRING (request method was GET) ?
-        call get_environment_variable( "QUERY_STRING", value=content, status=iStat )
+        call get_environment_variable( "QUERY_STRING", value=content, length=iLen, status=iStat )
         if ( iStat == 0 ) then
             write(unitNo, AFORMAT) '%REMARK% QUERY_STRING='//trim(content)
             if ( iLen > 0 ) then
