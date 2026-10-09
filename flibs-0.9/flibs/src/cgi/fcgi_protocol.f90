@@ -112,7 +112,7 @@ contains
         write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//content(:iLen)
 
         ! QUERY_STRING (request method was GET) ?
-        call get_environment_variable( "QUERY_STRING", value=content, length=iLen, status=iStat )
+        call get_environment_variable( "QUERY_STRING", value=content, status=iStat )
         if ( iStat == 0 ) then
             write(unitNo, AFORMAT) '%REMARK% QUERY_STRING='//trim(content)
             if ( iLen > 0 ) then
@@ -125,17 +125,23 @@ contains
         call get_environment_variable( "CONTENT_LENGTH", value=content, status=iStat )
         if ( iStat == 0 ) then
             write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//trim(content)
-            iLen = len_trim(content)
-            if ( iLen > 0 ) then
-                read( content, * ) iLen
-                do i=1,iLen
-                    ch = fcgip_get_char()
-                    content( i:i ) = ch
-                end do
-                content( iLen+1: ) = ' '
-                call cgi_store_dict( dict, content(:iLen) )
-                write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
+            if ( len_trim(content) > 0 ) then
+                ! the body length is client-controlled: it must parse and fit in 'content'
+                read( content, *, iostat=iStat ) iLen
+                if ( iStat /= 0 .or. iLen < 0 .or. iLen > MAX_CONTENT_LENGTH ) then
+                    write(unitNo, AFORMAT) '%REMARK% rejected CONTENT_LENGTH (invalid or too large)'
+                else
+                    do i=1,iLen
+                        ch = fcgip_get_char()
+                        content( i:i ) = ch
+                    end do
+                    content( iLen+1: ) = ' '
+                    call cgi_store_dict( dict, content(:iLen) )
+                    write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
+                end if
             end if
+        else if ( iStat == -1 ) then
+            write(unitNo, AFORMAT) '%REMARK% rejected CONTENT_LENGTH (value too long)'
         endif
 
         ! for other environment variables, see <nginx directory>/conf/fastcgi_params
