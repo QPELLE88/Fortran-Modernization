@@ -1,13 +1,9 @@
 #!/bin/sh
 #
-# Restart fortran-machine
+# Rebuild and restart the Fortran.io FastCGI server on 127.0.0.1:9000.
+set -e
+cd "$(dirname "$0")"
 
-# Kill server, if running
-pkill -f fortran_fcgi
-
-# Recompile server
-rm fortran_fcgi
+pkill -f fortran_fcgi || true
 make
-
-# Respawn fcgi
-spawn-fcgi -a 127.0.0.1 -p 9000 ./fortran_fcgi
+spawn-fcgi -a 127.0.0.1 -p 9000 -d "$PWD" -- "$PWD/fortran_fcgi"

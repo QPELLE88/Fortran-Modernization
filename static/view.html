@@ -48,37 +48,21 @@ body
     li
       a(href="http://example.com") Link
 </pre>
-        <p>You can insert variable names into your template:</p>
+        <p>You can insert variable names into your template. Values are HTML-escaped, so data from the
+        database or the URL cannot inject markup:</p>
 <pre>
 h4
   span #{name}
   small #{occupation}
 </pre>
-
-        <p>Control functions (for / if - else - endif) and container divs should be printed directly in the controller.</p>
-        <p>This is also where you pass info to the template engine:</p>
+        <p>Loops and conditionals live in the controller, which renders a template once per item:</p>
 <pre>
-! open .container
-write(unitNo,AFORMAT) '&lt;div class="container"&gt;'
-
-! use a 2D array for key-value pairs -
-pagevars(1,1) = 'name'
-pagevars(1,2) = 'Nick'
-pagevars(2,1) = 'occupation'
-pagevars(2,2) = 'mapmaker'
-
-! use URL variable ?lang=__ to fill in this variable
-call cgi_get(dict, 'lang', language)
-
-if (language == 'english') then
-  templatefile = 'template/result-english.jade'
-else
-  templatefile = 'template/result-spanish.jade'
-endif
-call jadetemplate(templatefile, unitNo, pagevars)
-
-! close .container
-write(unitNo,AFORMAT) '&lt;/div&gt;'
+call load_template('template/result.jade', row_template, ok, errmsg)
+do i = 1, size(rows)
+  html = html // render_jade(row_template, [ &amp;
+    tvar('name', rows(i)%name), &amp;
+    tvar('occupation', rows(i)%occupation)])
+end do
 </pre>
       </div>
     </div>

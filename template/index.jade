@@ -37,11 +37,11 @@
       h4 Using Ubuntu
       code sudo ./install_deps_ubu.sh
       p OR
-      code sudo apt-get install nginx gfortran spawn-fcgi git libfcgi-dev sqlite3
+      code sudo apt-get install nginx gfortran spawn-fcgi git libfcgi-dev libsqlite3-dev
       br
       code git clone https://github.com/mapmeld/fortran-machine.git
       br
-      strong Use gfortran to compile flibs and other libraries, then:
+      strong Build with make, then:
       br
       code spawn-fcgi -a 127.0.0.1 -p 9000 ./fortran_fcgi
     .col-sm-6

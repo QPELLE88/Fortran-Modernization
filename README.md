@@ -1,6 +1,6 @@
 # Fortran.io
 
-An MVC web stack written in Fortran 90 (so you get arrays, and it's not punchcards)
+An MVC web stack written in modern Fortran (2018) (so you get arrays, and it's not punchcards)
 
 Major credit due to:
 
@@ -61,74 +61,76 @@ You should now see the test page on your IP address.
 Test doc
 ```
 
-## Use Fortran CGI script
-
-Let's go from test page to Fortran script:
+## Build and run
 
 ```
-# compile the test server
-make
+make            # builds ./fortran_fcgi (gfortran -std=f2018 -Wall -Wextra -Werror)
+make test       # Fortran unit tests (run with -fcheck=all)
+make e2e        # nginx + spawn-fcgi end-to-end checks on 127.0.0.1, no root needed
 ```
 
-Now change nginx config /etc/nginx/sites-available/default
+Point nginx at the FastCGI server in /etc/nginx/sites-available/default:
 
 ```
 location / {
 	root /home/fortran/fortran-machine;
 	fastcgi_pass 127.0.0.1:9000;
-	fastcgi_index index.html;
 	include fastcgi_params;
 }
-```
 
-Then run ```sudo service nginx restart```
-
-```
-# spawn the server
-spawn-fcgi -a 127.0.0.1 -p 9000 ./fortran_fcgi
-```
-
-### Restarting the script
-
-After changing the source code, you can recompile and restart your server with:
-
-```
-./restart.sh
-```
-
-## Add a static folder
-
-Add to nginx config /etc/nginx/sites-available/default
-
-```
 location /static {
-    root /home/fortran/fortran-machine;
+	root /home/fortran/fortran-machine;
 }
 ```
 
-And restart nginx
+Then run `sudo service nginx restart` and spawn the server from the repo directory
+(templates and `marsupials.sqlite3` are opened relative to it; override with
+`FORTRAN_IO_TEMPLATE_DIR` and `FORTRAN_IO_DB`):
 
 ```
-sudo service nginx restart
+spawn-fcgi -a 127.0.0.1 -p 9000 -d $PWD -- ./fortran_fcgi
 ```
+
+After changing the source code, rebuild and respawn with `./restart.sh`.
+
+Without nginx, the binary also runs as a plain CGI program, which is handy for debugging:
+
+```
+DOCUMENT_URI=/search QUERY_STRING=q=koala ./fortran_fcgi
+```
+
+## Layout
+
+| File | Role |
+| --- | --- |
+| `src/main.f90` | FastCGI accept loop |
+| `src/fastcgi.f90` | ISO_C_BINDING interface to libfcgi |
+| `src/http.f90` | request parsing (query string, form POST), responses with status codes |
+| `src/app.f90` | controller: routes and page assembly |
+| `src/jade.f90` | Jade-style template renderer |
+| `src/marsupials.f90` | model: queries on the `marsupials` table |
+| `src/sqlite_db.f90` | ISO_C_BINDING interface to SQLite (prepared statements) |
+| `src/strings.f90` | escaping, URL decoding, string helpers |
+| `test/` | unit tests and the end-to-end script |
+
+`flibs-0.9/` is the original library collection the first version of this app was built on; it is kept for
+reference but no longer compiled or linked.
 
 ## Fortran controller
 
-The controller is written in Fortran in the fortran_fcgi.f90 file:
+The controller in `src/app.f90` maps a request to a response:
 
 ```fortran
+select case (req%path)
 case ('/')
-	! most pages look like this
-	templatefile = 'template/index.jade'
-	call jadefile(templatefile, unitNo)
-
+	resp = static_page(cfg, 'index.jade')
 case ('/search')
-	write(unitNo,AFORMAT) '<div class="container">'
-
-	templatefile = 'template/search.jade'
-	call jadefile(templatefile, unitNo)
-
-	write(unitNo,AFORMAT) '</div>'
+	resp = search_page(cfg, get_param(req, 'q', ''))
+case ('/all')
+	resp = all_page(cfg)
+case default
+	resp = html_response(layout('<p>Page not found!</p>'), 404)
+end select
 ```
 
 ## Jade Templates
@@ -136,6 +138,7 @@ case ('/search')
 In the template folder, you can write HTML templates similar to Jade or HAML.
 
 If you want to have a loop or other structure, it's better to create a partial and run the loop in the Fortran controller.
+`#{name}` placeholders are HTML-escaped; template text itself is trusted markup.
 
 ```jade
 .container
@@ -149,62 +152,24 @@ If you want to have a loop or other structure, it's better to create a partial a
 ## SQLite Database
 
 You can connect to a SQLite database. The example on <a href="https://fortran.io">Fortran.io</a>
-lets you search through marsupials!
-
-Here's how the getAllMarsupials subroutine loads data into arrays:
+lets you search through marsupials! User input is bound as a parameter, never pasted into SQL:
 
 ```fortran
-subroutine getAllMarsupials(name, latinName, wikiLink, description)
-	! columns
-	character(len=50), dimension(8)	:: name, latinName, wikiLink, description
-
-	call sqlite3_open('marsupials.sqlite3', db)
-
-	allocate( column(4) )
-	call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-	call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-	call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
-	call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
-
-	call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
-
-	i = 1
-	do
-		call sqlite3_next_row(stmt, column, finished)
-		if (finished) exit
-
-		call sqlite3_get_column(column(1), name(i))
-		call sqlite3_get_column(column(2), latinName(i))
-		call sqlite3_get_column(column(3), wikiLink(i))
-		call sqlite3_get_column(column(4), description(i))
-		i = i + 1
-	end do
-endsubroutine
+call db_open_readonly(db_path, db, ok, errmsg)
+call db_prepare(db, 'SELECT name, latinName, wikiLink, description FROM marsupials' // &
+                ' WHERE instr(lower(name), lower(?1)) > 0 ORDER BY rowid LIMIT ?2', stmt, ok)
+if (ok) call stmt_bind_text(stmt, 1, query, ok)
+do while (ok)
+	call stmt_step(stmt, has_row, ok)
+	if (.not. (ok .and. has_row)) exit
+	row%name = stmt_column_text(stmt, 1)
+	! ...
+end do
+call stmt_finalize(stmt)
+call db_close(db)
 ```
 
-Then in the Fortran controller, you loop through:
-
-```fortran
-call getAllMarsupials(names, latinNames, wikiLinks, descriptions)
-
-i = 1
-do
-	pagevars(1,2) = names(i)
-	pagevars(2,2) = latinNames(i)
-	pagevars(3,2) = wikiLinks(i)
-	pagevars(4,2) = descriptions(i)
-	if (len(trim(pagevars(1,2))) == 0 .or. i == 5) then
-		exit
-	else
-		! template with string
-		templatefile = 'template/result.jade'
-		call jadetemplate(templatefile, unitNo, pagevars)
-		i = i + 1
-	endif
-enddo
-```
-
-Then the individual result template:
+The controller then renders `template/result.jade` once per row:
 
 ```jade
 .row

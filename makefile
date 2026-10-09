@@ -1,50 +1,39 @@
-# vim: noexpandtab: tabstop=4:
+# Fortran.io build. Requires gfortran, libfcgi-dev and libsqlite3-dev (see install_deps_*.sh).
 
-FLIBS=flibs-0.9/flibs/src
-LIBSQLITE3=$(shell find /usr -name libsqlite3.a -print -quit)
+FC       = gfortran
+FFLAGS   = -std=f2018 -O2 -g -Wall -Wextra -Wimplicit-interface -Werror -fimplicit-none
+# gfortran 11 emits false maybe-uninitialized warnings for deferred-length strings at -O0.
+TESTFLAGS = -O0 -fcheck=all -fbacktrace -Wno-maybe-uninitialized
+LDLIBS   = -lfcgi -lsqlite3
+BUILD    = build
 
-FORTRAN=gfortran
-FORTRANFLAGS=-ldl -lfcgi -pthread -Wl,-rpath -Wl,/usr/lib
+# Module sources, in dependency order.
+SRC = \
+	src/strings.f90 \
+	src/http.f90 \
+	src/fastcgi.f90 \
+	src/sqlite_db.f90 \
+	src/jade.f90 \
+	src/marsupials.f90 \
+	src/app.f90
 
-ifndef $(LIBSQLITE3)
-FORTRANFLAGS=-ldl -lfcgi -lsqlite3 -pthread -Wl,-rpath -Wl,/usr/lib
-endif
+all: fortran_fcgi
 
-OBJECTS = \
-	marsupial.o \
-	jade.o \
-	string_helpers.o \
-	fsqlite.o \
-	cgi_protocol.o \
-	fcgi_protocol.o \
-	csqlite.o
+fortran_fcgi: $(SRC) src/main.f90 makefile
+	@mkdir -p $(BUILD)/release
+	$(FC) $(FFLAGS) -J$(BUILD)/release $(SRC) src/main.f90 -o $@ $(LDLIBS)
 
-fortran_fcgi: fortran_fcgi.f90 $(OBJECTS)
-	$(FORTRAN) -o $@ $^ $(LIBSQLITE3) $(FORTRANFLAGS) 
+$(BUILD)/test/test_suite: $(SRC) test/test_suite.f90 makefile
+	@mkdir -p $(BUILD)/test
+	$(FC) $(FFLAGS) $(TESTFLAGS) -J$(BUILD)/test $(SRC) test/test_suite.f90 -o $@ $(LDLIBS)
 
-marsupial.o: marsupial.f90 string_helpers.o fsqlite.o
-	$(FORTRAN) -c $<
+test: $(BUILD)/test/test_suite
+	./$(BUILD)/test/test_suite
 
-jade.o: jade.f90 string_helpers.o
-	$(FORTRAN) -c $<
-
-string_helpers.o: string_helpers.f90
-	$(FORTRAN) -c $<
-
-fsqlite.o: $(FLIBS)/sqlite/fsqlite.f90
-	$(FORTRAN) -c $<
-
-cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90
-	$(FORTRAN) -c $<
-
-fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90
-	$(FORTRAN) -c $<
-
-csqlite.o: $(FLIBS)/sqlite/csqlite.c
-	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
-	cp $(FLIBS)/sqlite/csqlite.o . 
+e2e: fortran_fcgi
+	./test/e2e.sh
 
 clean:
-	rm -f -v fortran_fcgi *.o *.mod $(FLIBS)/sqlite/*.o
+	rm -rf $(BUILD) fortran_fcgi *.o *.mod
 
-.PHONY: clean
+.PHONY: all test e2e clean
