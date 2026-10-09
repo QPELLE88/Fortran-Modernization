@@ -44,9 +44,16 @@ module marsupial
     call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER(?)) LIMIT 4")
-    if ( sqlite3_error( db ) ) return
+    if ( sqlite3_error( db ) ) then
+      call sqlite3_close( db )
+      return
+    endif
     call sqlite3_bind_text( db, stmt, 1, trim(query) )
-    if ( sqlite3_error( db ) ) return
+    if ( sqlite3_error( db ) ) then
+      call sqlite3_finalize( stmt )
+      call sqlite3_close( db )
+      return
+    endif
 
     i = 1
     do
