@@ -18,14 +18,20 @@
 #       print the result on standard output and then finish
 #     - You can run programs (URL ends in .exe) that use the simple
 #       protocol exemplified in "cgi.f90" (see also below)
-#
-#     TODO: use cgi-bin/* instead of the extension
+#     - Scripts and programs are only run if they reside in the
+#       cgi-bin directory; requests for .tcl/.exe files elsewhere
+#       are refused. Requests resolving outside the root are refused.
 #
 #     The configuration file can specify:
 #     - root      The root directory of the application (default: startup directory)
 #     - default   The start-up page (default: index.html)
-#     - port      Port to be used (default: 80)
+#     - port      Port to be used (default: 8015)
 #     - encoding  The encoding of the data sent to the client (default: iso8859-1)
+#     - address   Address to listen on (default: 127.0.0.1, i.e. local only)
+#     - allowed   List of glob patterns for client addresses that may
+#                 connect (default: 127.0.0.1 ::1; use * to allow all)
+#     - cgibin    Directory (relative to root) holding the .tcl/.exe
+#                 files that may be run (default: cgi-bin)
 #
 #     What configuration file:
 #     - If the configuration file is not specified on the command-line
@@ -55,8 +61,8 @@
 #       moment (this requires directory and process management)
 #       This means among other things, that the output may get
 #       confused if more than process is running at the same time
-#     - No checking of the incoming connections, you can do this
-#       however by redefining the "answer" procedure in the
+#     - Only simple checking of the incoming connections (see "allowed"),
+#       you can do more by redefining the "answer" procedure in the
 #       configuration file
 #     - On Windows, if you start this script with wish or a similar
 #       shell, the server socket will not be closed properly when
@@ -80,6 +86,9 @@ set root      [pwd]
 set default   index.html
 set port      8015
 set encoding  iso8859-1
+set address   127.0.0.1
+set allowed   {127.0.0.1 ::1}
+set cgibin    cgi-bin
 
 # bgerror --
 #     Handle background errors (echo to the screen and to the client)
@@ -106,10 +115,92 @@ proc bgerror msg {
 # Result:
 #     None
 # Note:
-#     Right now any connection is accepted
+#     Only connections from hosts matching the "allowed" patterns
+#     are accepted
 #
 proc answer {socketChannel host2 port2} {
-  fileevent $socketChannel readable [list serve $socketChannel]
+    foreach pattern $::allowed {
+        if {[string match $pattern $host2]} {
+            fileevent $socketChannel readable [list serve $socketChannel]
+            return
+        }
+    }
+    puts "Connection from $host2 refused"
+    close $socketChannel
+}
+
+# httpError --
+#     Send an error response and close the connection
+# Arguments:
+#     sock      Channel for the socket
+#     status    HTTP status line (code and reason)
+#     text      Message for the client
+# Result:
+#     None
+#
+proc httpError {sock status text} {
+    puts $sock "HTTP/1.0 $status"
+    puts $sock "Content-Type: text/html;charset=$::encoding\n"
+    puts $sock "<html><head><title>$status</title></head>"
+    puts $sock "<body><center>"
+    puts $sock $text
+    puts $sock "</center></body></html>"
+    close $sock
+}
+
+# isUnder --
+#     Check whether a normalized path is (inside) a normalized directory
+# Arguments:
+#     path      Normalized path
+#     dir       Normalized directory
+# Result:
+#     1 if path equals dir or lies below it, 0 otherwise
+#
+proc isUnder {path dir} {
+    set p [file split $path]
+    set d [file split $dir]
+    set n [llength $d]
+    if {[llength $p] < $n} {
+        return 0
+    }
+    if {$::tcl_platform(platform) eq "windows"} {
+        return [string equal -nocase [lrange $p 0 [expr {$n-1}]] $d]
+    }
+    return [string equal [lrange $p 0 [expr {$n-1}]] $d]
+}
+
+# resolveUrlPath --
+#     Map the path part of a URL onto a file under the root directory
+# Arguments:
+#     tail      Path part of the URL (starts with /)
+# Result:
+#     Normalized file name, or "" if the path is not acceptable
+#
+proc resolveUrlPath {tail} {
+    set decoded [encoding convertfrom utf-8 [binary format a* \
+        [subst -nocommands -novariables \
+            [regsub -all {%([0-9A-Fa-f]{2})} [string map {\\ \\\\ [ \\[} $tail] {\\u00\1}]]]]
+
+    if {[regexp {[\x00-\x1f\\:]} $decoded]} {
+        return ""
+    }
+    set parts {}
+    foreach part [split $decoded /] {
+        if {$part eq "" || $part eq "."} {
+            continue
+        }
+        if {$part eq ".." || [string match ~* $part]} {
+            return ""
+        }
+        lappend parts $part
+    }
+
+    set root [file normalize $::root]
+    set name [file normalize [file join $root {*}$parts]]
+    if {![isUnder $name $root]} {
+        return ""
+    }
+    return $name
 }
 
 # serve --
@@ -147,24 +238,40 @@ proc serve sock {
     set tail /
     regexp {(/[^ ?]*)(\?[^ ]*)?} $line -> tail args
     if {[string match */ $tail]} {append tail $::default}
-    set name [string map {%20 " "} $::root$tail]
+    set name [resolveUrlPath $tail]
     set args [string range $args 1 end]
+
+    if {$name eq ""} {
+        puts "URL $tail refused"
+        httpError $sock "403 Forbidden" "Access to the URL you requested is not allowed."
+        return
+    }
 
     #
     # The URL must be an existing file:
-    # - A Tcl script
-    # - An executable (hm, how to deal with platforms that do not use
-    #   the extension .exe?)
+    # - A Tcl script (in the cgi-bin directory)
+    # - An executable (in the cgi-bin directory; hm, how to deal with
+    #   platforms that do not use the extension .exe?)
     # - An HTML file (anything else, actually)
     #
+    set extension [file extension $name]
+    if {$extension in {.tcl .exe}} {
+        set cgibin [file normalize [file join $::root $::cgibin]]
+        if {![isUnder $name $cgibin] || $name eq $cgibin} {
+            puts "Program $name is not in $cgibin - refused"
+            httpError $sock "403 Forbidden" "Access to the URL you requested is not allowed."
+            return
+        }
+    }
+
     set exe 0
     set perm r
-    if {[file readable $name]} {
+    if {[file isfile $name] && [file readable $name]} {
         puts $sock "HTTP/1.0 200 OK"
-        if {[file extension $name] eq ".tcl"} {
+        if {$extension eq ".tcl"} {
             set ::env(QUERY_STRING) [string range $args 1 end]
             set name [list |tclsh $name]
-        } elseif {[file extension $name] eq ".exe"} {
+        } elseif {$extension eq ".exe"} {
             set exe  1
             set perm w+
             set name [list |$name]
@@ -188,12 +295,7 @@ proc serve sock {
         fcopy $inchan $sock -command [list done $inchan $sock]
     } else {
         puts "URL/File $name not found!"
-        puts $sock "HTTP/1.0 404 Not found\n"
-        puts $sock "<html><head><title>No such URL</title></head>"
-        puts $sock "<body><center>"
-        puts $sock "The URL you requested does not exist on this site."
-        puts $sock "</center></body></html>"
-        close $sock
+        httpError $sock "404 Not found" "The URL you requested does not exist on this site."
     }
 }
 
@@ -266,8 +368,8 @@ if { $cfg >= 0 } {
 }
 
 if { [file readable $cfgfile] } {
-    puts "Using configuration file $cgfile"
-    source $cgifile
+    puts "Using configuration file $cfgfile"
+    source $cfgfile
 }   else {
     puts "Using default configuration"
 }
@@ -279,7 +381,7 @@ if { ! [file readable [file join $root $default]] } {
     puts "Error: could not find startup file/URL -  [file join $root $default]"
     puts "Stopping server"
 } else {
-    socket -server answer $port
+    socket -server answer -myaddr $address $port
     puts "Server ready..."
     vwait forever
 }
