@@ -169,17 +169,32 @@ proc isUnder {path dir} {
     return [string equal [lrange $p 0 [expr {$n-1}]] $d]
 }
 
+# realPath --
+#     Normalize a path, resolving symbolic links in every component
+#     (file normalize leaves a symbolic link in the last component as is)
+# Arguments:
+#     path      Path to resolve
+# Result:
+#     Fully resolved absolute path
+#
+proc realPath {path} {
+    file dirname [file normalize [file join $path __dummy__]]
+}
+
 # resolveUrlPath --
 #     Map the path part of a URL onto a file under the root directory
 # Arguments:
 #     tail      Path part of the URL (starts with /)
 # Result:
-#     Normalized file name, or "" if the path is not acceptable
+#     Fully resolved file name, or "" if the path is not acceptable
 #
 proc resolveUrlPath {tail} {
     set decoded [encoding convertfrom utf-8 [binary format a* \
         [subst -nocommands -novariables \
             [regsub -all {%([0-9A-Fa-f]{2})} [string map {\\ \\\\ [ \\[} $tail] {\\u00\1}]]]]
+    if {[string match */ $decoded]} {
+        append decoded $::default
+    }
 
     if {[regexp {[\x00-\x1f\\:]} $decoded]} {
         return ""
@@ -195,8 +210,8 @@ proc resolveUrlPath {tail} {
         lappend parts $part
     }
 
-    set root [file normalize $::root]
-    set name [file normalize [file join $root {*}$parts]]
+    set root [realPath $::root]
+    set name [realPath [file join $root {*}$parts]]
     if {![isUnder $name $root]} {
         return ""
     }
@@ -237,7 +252,6 @@ proc serve sock {
     fileevent $sock readable ""
     set tail /
     regexp {(/[^ ?]*)(\?[^ ]*)?} $line -> tail args
-    if {[string match */ $tail]} {append tail $::default}
     set name [resolveUrlPath $tail]
     set args [string range $args 1 end]
 
@@ -256,7 +270,7 @@ proc serve sock {
     #
     set extension [file extension $name]
     if {$extension in {.tcl .exe}} {
-        set cgibin [file normalize [file join $::root $::cgibin]]
+        set cgibin [realPath [file join $::root $::cgibin]]
         if {![isUnder $name $cgibin] || $name eq $cgibin} {
             puts "Program $name is not in $cgibin - refused"
             httpError $sock "403 Forbidden" "Access to the URL you requested is not allowed."
