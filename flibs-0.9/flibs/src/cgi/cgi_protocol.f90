@@ -226,13 +226,18 @@ subroutine cgi_post_method( dict, length )
 
     character(len=:), allocatable :: buffer
     integer                       :: ierr
+    integer                       :: nread
 
     call cgi_check_length( length, "CONTENT_LENGTH" )
 
     allocate( character(len=length) :: buffer )
     if ( length > 0 ) then
-        read( *, '(a)', advance='no', iostat=ierr ) buffer
+        nread = 0
+        read( *, '(a)', advance='no', iostat=ierr, size=nread ) buffer
         if ( ierr /= 0 .and. .not. is_iostat_eor(ierr) ) then
+            call cgi_reject_input( "Incomplete request body" )
+        endif
+        if ( nread < length ) then
             call cgi_reject_input( "Incomplete request body" )
         endif
     endif
