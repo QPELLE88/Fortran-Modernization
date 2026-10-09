@@ -16,6 +16,8 @@ module cgi_protocol
     integer, parameter :: DICT_VALUE_LENGTH  = 200
     integer, parameter :: DICT_BUFFER_LENGTH = DICT_KEY_LENGTH + DICT_VALUE_LENGTH + 1
 
+    integer, parameter :: CGI_MAX_INPUT_LENGTH = 65536
+
     integer, parameter :: output_no_header    = 0
     integer, parameter :: output_html         = 1
     integer, parameter :: output_text         = 2
@@ -69,6 +71,7 @@ subroutine cgi_begin( html, dict, luout )
 
     integer                           :: length
     integer                           :: status
+    integer                           :: ierr
     logical                           :: opend
     character(len=DICT_BUFFER_LENGTH) :: string
     character(len=1)                  :: ch
@@ -91,8 +94,14 @@ subroutine cgi_begin( html, dict, luout )
         method = 1
     else
         call get_environment_variable( "CONTENT_LENGTH", value=string, status=status )
-        if ( status == 0 ) then
-            read( string, * ) length
+        if ( status == 0 .or. status == -1 ) then
+            ierr = status
+            if ( ierr == 0 ) then
+                read( string, *, iostat=ierr ) length
+            endif
+            if ( ierr /= 0 ) then
+                call cgi_reject_input( "Invalid CONTENT_LENGTH" )
+            endif
             call cgi_post_method( dict, length )
             method = 1
         else
@@ -190,9 +199,16 @@ subroutine cgi_get_method( dict, length )
     type(DICT_STRUCT), pointer :: dict
     integer, intent(in)        :: length
 
-    character(len=length)      :: buffer
+    character(len=:), allocatable :: buffer
+    integer                       :: status
 
-    call get_environment_variable( "QUERY_STRING", value=buffer )
+    call cgi_check_length( length, "QUERY_STRING" )
+
+    allocate( character(len=length) :: buffer )
+    call get_environment_variable( "QUERY_STRING", value=buffer, status=status )
+    if ( status /= 0 ) then
+        call cgi_reject_input( "Invalid QUERY_STRING" )
+    endif
     call cgi_store_dict( dict, buffer )
 
 end subroutine cgi_get_method
@@ -208,12 +224,61 @@ subroutine cgi_post_method( dict, length )
     type(DICT_STRUCT), pointer :: dict
     integer, intent(in)        :: length
 
-    character(len=length)      :: buffer
+    character(len=:), allocatable :: buffer
+    integer                       :: ierr
+    integer                       :: nread
 
-    read( *, '(a)', advance='no' ) buffer
+    call cgi_check_length( length, "CONTENT_LENGTH" )
+
+    allocate( character(len=length) :: buffer )
+    if ( length > 0 ) then
+        nread = 0
+        read( *, '(a)', advance='no', iostat=ierr, size=nread ) buffer
+        if ( ierr /= 0 .and. .not. is_iostat_eor(ierr) ) then
+            call cgi_reject_input( "Incomplete request body" )
+        endif
+        if ( nread < length ) then
+            call cgi_reject_input( "Incomplete request body" )
+        endif
+    endif
     call cgi_store_dict( dict, buffer )
 
 end subroutine cgi_post_method
+
+! cgi_check_length --
+!     Reject a negative or oversized input length before any buffer is allocated
+!
+! Arguments:
+!     length         Length announced by the server
+!     source         Name of the variable the length came from
+!
+subroutine cgi_check_length( length, source )
+    integer, intent(in)          :: length
+    character(len=*), intent(in) :: source
+
+    if ( length < 0 ) then
+        call cgi_reject_input( "Invalid " // source )
+    endif
+    if ( length > CGI_MAX_INPUT_LENGTH ) then
+        call cgi_reject_input( source // " too large" )
+    endif
+
+end subroutine cgi_check_length
+
+! cgi_reject_input --
+!     Report malformed request input on standard output and stop
+!
+! Arguments:
+!     msg            Message to be printed
+!
+subroutine cgi_reject_input( msg )
+    character(len=*), intent(in) :: msg
+
+    method    = 1
+    luout_cgi = 6
+    call cgi_error( msg )
+
+end subroutine cgi_reject_input
 
 ! cgi_dustmote_method --
 !     Get the information line by line
