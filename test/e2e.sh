@@ -76,6 +76,8 @@ expect "SQL metacharacters are literal" 200 "No results for" "Phascolarctos" "$B
 expect "long query (4000 chars)" 200 "No results for" - "$BASE/search?q=$(printf 'k%.0s' $(seq 4000))"
 expect "all marsupials" 200 "Petaurus breviceps" - "$BASE/all"
 expect "form POST" 200 "Vombatus ursinus" - -X POST --data "q=wombat" "$BASE/search"
+expect "over-long query rejected" 414 "414" - "$BASE/search?q=$(printf 'k%.0s' $(seq 20000))"
+expect "NUL in query does not truncate page" 200 "</html>" - "$BASE/search?q=zzz%00"
 expect "oversized POST rejected" 413 "Payload Too Large" - -X POST --data-binary "@-" "$BASE/search" \
   < <(head -c 70000 /dev/zero | tr '\0' 'a')
 expect "unknown route" 404 "Page not found!" - "$BASE/nope"

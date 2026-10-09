@@ -6,7 +6,7 @@ module marsupials
 
   public :: marsupial_t, search_marsupials, all_marsupials
 
-  integer, parameter :: MAX_ROWS = 50
+  integer, parameter :: MAX_SEARCH_ROWS = 50, NO_LIMIT = -1
   character(len=*), parameter :: SELECT_ALL = &
     'SELECT name, latinName, wikiLink, description FROM marsupials'
 
@@ -34,7 +34,7 @@ contains
     end if
     call run_query(db_path, SELECT_ALL // &
                    ' WHERE instr(lower(name), lower(?1)) > 0 ORDER BY rowid LIMIT ?2', &
-                   results, ok, errmsg, trim(adjustl(query)))
+                   MAX_SEARCH_ROWS, results, ok, errmsg, trim(adjustl(query)))
   end subroutine search_marsupials
 
   subroutine all_marsupials(db_path, results, ok, errmsg)
@@ -43,33 +43,35 @@ contains
     logical, intent(out) :: ok
     character(len=:), allocatable, intent(out) :: errmsg
 
-    call run_query(db_path, SELECT_ALL // ' ORDER BY rowid LIMIT ?2', results, ok, errmsg)
+    call run_query(db_path, SELECT_ALL // ' ORDER BY rowid LIMIT ?2', NO_LIMIT, results, ok, errmsg)
   end subroutine all_marsupials
 
-  !> Open, prepare, bind (?1 = text, ?2 = row limit), collect rows, and always release handles.
-  subroutine run_query(db_path, sql, results, ok, errmsg, text)
+  !> Open, prepare, bind (?1 = text, ?2 = row limit, negative = none), collect rows, and always release handles.
+  subroutine run_query(db_path, sql, limit, results, ok, errmsg, text)
     character(len=*), intent(in) :: db_path, sql
+    integer, intent(in) :: limit
     type(marsupial_t), allocatable, intent(out) :: results(:)
     logical, intent(out) :: ok
     character(len=:), allocatable, intent(out) :: errmsg
     character(len=*), intent(in), optional :: text
     type(db_t) :: db
     type(stmt_t) :: stmt
-    type(marsupial_t) :: rows(MAX_ROWS)
+    type(marsupial_t), allocatable :: rows(:)
     logical :: has_row
     integer :: n
 
-    allocate(results(0))
+    allocate(results(0), rows(16))
     n = 0
     call db_open_readonly(db_path, db, ok, errmsg)
     if (.not. ok) return
 
     call db_prepare(db, sql, stmt, ok)
     if (ok .and. present(text)) call stmt_bind_text(stmt, 1, text, ok)
-    if (ok) call stmt_bind_int(stmt, 2, MAX_ROWS, ok)
-    do while (ok .and. n < MAX_ROWS)
+    if (ok) call stmt_bind_int(stmt, 2, limit, ok)
+    do while (ok)
       call stmt_step(stmt, has_row, ok)
       if (.not. (ok .and. has_row)) exit
+      if (n == size(rows)) rows = [rows, rows]
       n = n + 1
       rows(n)%name = stmt_column_text(stmt, 1)
       rows(n)%latin_name = stmt_column_text(stmt, 2)

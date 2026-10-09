@@ -94,7 +94,7 @@ contains
       if (len(line) > 0) then
         if (line(len(line):) == CR) line = line(:len(line)-1)
       end if
-      if (len_trim(line) == 0) cycle
+      if (verify(line, ' ' // achar(9)) == 0) cycle
 
       indent = verify(line, ' ' // achar(9)) - 1
       content = trim(line(indent+1:))

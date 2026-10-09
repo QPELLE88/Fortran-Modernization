@@ -2,11 +2,12 @@
 program fortran_fcgi
   use fastcgi, only: fcgi_accept, fcgi_read_body, fcgi_write
   use http, only: request_t, response_t, request_from_env, error_response, &
-                  serialize_response, content_length_from_env
+                  serialize_response, content_length_from_env, get_env
   use app, only: app_config_t, config_from_env, handle_request
   implicit none
 
   integer, parameter :: MAX_BODY_BYTES = 64 * 1024
+  integer, parameter :: MAX_QUERY_BYTES = 16 * 1024
 
   type(app_config_t) :: cfg
   type(request_t) :: req
@@ -22,6 +23,8 @@ program fortran_fcgi
       resp = error_response(400, 'Invalid Content-Length.')
     else if (content_length > MAX_BODY_BYTES) then
       resp = error_response(413, 'Request body too large.')
+    else if (len(get_env('QUERY_STRING')) > MAX_QUERY_BYTES) then
+      resp = error_response(414, 'Query string too long.')
     else
       call fcgi_read_body(content_length, body)
       req = request_from_env(body)

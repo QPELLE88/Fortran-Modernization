@@ -49,10 +49,10 @@ contains
       end if
     end if
 
-    nq = size(query_params)
-    allocate(req%params(nq + size(body_params)))
-    req%params(:nq) = query_params
-    req%params(nq+1:) = body_params
+    nq = size(body_params)
+    allocate(req%params(nq + size(query_params)))
+    req%params(:nq) = body_params
+    req%params(nq+1:) = query_params
   end function new_request
 
   !> Build a request from the CGI environment that FastCGI exposes for the current request.
@@ -181,6 +181,8 @@ contains
       text = 'Not Found'
     case (413)
       text = 'Payload Too Large'
+    case (414)
+      text = 'URI Too Long'
     case (500)
       text = 'Internal Server Error'
     case default

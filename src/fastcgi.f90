@@ -1,7 +1,7 @@
 !> Minimal ISO_C_BINDING interface to libfcgi's stdio layer (fcgi_stdio.h).
 !> When the binary is not started under a FastCGI server it behaves as plain CGI.
 module fastcgi
-  use, intrinsic :: iso_c_binding, only: c_int, c_char, c_null_char
+  use, intrinsic :: iso_c_binding, only: c_int
   implicit none
   private
 
@@ -16,10 +16,10 @@ module fastcgi
       import :: c_int
     end function c_fcgi_getchar
 
-    integer(c_int) function c_fcgi_puts(s) bind(C, name='FCGI_puts')
-      import :: c_int, c_char
-      character(kind=c_char), intent(in) :: s(*)
-    end function c_fcgi_puts
+    integer(c_int) function c_fcgi_putchar(c) bind(C, name='FCGI_putchar')
+      import :: c_int
+      integer(c_int), value :: c
+    end function c_fcgi_putchar
   end interface
 
 contains
@@ -46,12 +46,16 @@ contains
     end do
   end subroutine fcgi_read_body
 
-  !> Write a complete raw response (headers + body) to the web server.
+  !> Write a complete raw response (headers + body) byte by byte, so embedded NULs cannot truncate it.
   subroutine fcgi_write(raw)
     character(len=*), intent(in) :: raw
     integer(c_int) :: rc
+    integer :: i
 
-    rc = c_fcgi_puts(raw // c_null_char)
+    do i = 1, len(raw)
+      rc = c_fcgi_putchar(int(iachar(raw(i:i)), c_int))
+      if (rc < 0) return
+    end do
   end subroutine fcgi_write
 
 end module fastcgi

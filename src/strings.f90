@@ -36,7 +36,12 @@ contains
       case ("'")
         r = r // '&#39;'
       case default
-        r = r // s(i:i)
+        if (iachar(s(i:i)) < 32 .and. s(i:i) /= achar(9) .and. s(i:i) /= achar(10) &
+            .and. s(i:i) /= achar(13)) then
+          r = r // '&#xFFFD;'
+        else
+          r = r // s(i:i)
+        end if
       end select
     end do
   end function html_escape

@@ -51,6 +51,8 @@ contains
     call check_eq(html_escape('<a href="x">Tom & Jerry'' s</a>'), &
                   '&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39; s&lt;/a&gt;', 'html_escape')
     call check_eq(html_escape(''), '', 'html_escape empty')
+    call check_eq(html_escape('a' // achar(0) // 'b' // achar(9)), 'a&#xFFFD;b' // achar(9), &
+                  'html_escape neutralises control bytes')
     call check_eq(url_decode('sugar+glider%21'), 'sugar glider!', 'url_decode plus and hex')
     call check_eq(url_decode('100%'), '100%', 'url_decode trailing percent')
     call check_eq(url_decode('%zz%4'), '%zz%4', 'url_decode malformed escapes kept')
@@ -78,6 +80,8 @@ contains
 
     req = new_request('POST', '/search', 'a=1', 'q=wombat', 'application/x-www-form-urlencoded')
     call check_eq(get_param(req, 'q', ''), 'wombat', 'form POST body merged')
+    req = new_request('POST', '/search', 'q=koala', 'q=wombat', 'application/x-www-form-urlencoded')
+    call check_eq(get_param(req, 'q', ''), 'wombat', 'POST body wins over URL query')
     req = new_request('POST', '/search', '', 'q=wombat', 'text/plain')
     call check_eq(get_param(req, 'q', 'none'), 'none', 'non-form POST body ignored')
 
@@ -109,6 +113,8 @@ contains
     call check_eq(html, '<form>' // LF // '  <input name="q">' // LF // '  <hr>' // LF // '</form>' // &
                   LF // '<p>after</p>' // LF, 'void elements are not closed')
 
+    html = render_jade('p First' // LF // achar(9) // LF // '  ' // achar(9) // ' ' // LF // 'p Second', no_vars)
+    call check_eq(html, '<p>First</p>' // LF // '<p>Second</p>' // LF, 'whitespace-only lines skipped')
     html = render_jade('ul' // CRLF // CRLF // '  li one' // CRLF // '  li two' // CRLF, no_vars)
     call check_eq(html, '<ul>' // LF // '  <li>one</li>' // LF // '  <li>two</li>' // LF // '</ul>' // LF, &
                   'CRLF and blank lines')
@@ -196,6 +202,7 @@ contains
     cfg%template_dir = 'no-such-dir'
     resp = handle_request(new_request('GET', '/', ''), cfg)
     call check(resp%status == 500, 'missing template is 500')
+    call check(.not. contains_str(resp%body, 'template'), '500 hides internal details')
 
     call check_eq(safe_wiki_path('/wiki/Allied_rock-wallaby'), '/wiki/Allied_rock-wallaby', 'wiki path kept')
     call check_eq(safe_wiki_path('@evil.example/x'), '', 'off-site link dropped')

@@ -1,5 +1,6 @@
 !> Controller: maps a request to a response. Independent of FastCGI so it can be unit tested.
 module app
+  use, intrinsic :: iso_fortran_env, only: error_unit
   use strings, only: html_escape, starts_with
   use http, only: request_t, response_t, get_param, get_env, html_response, error_response
   use jade, only: template_var_t, tvar, load_template, render_jade, render_template_file
@@ -59,7 +60,7 @@ contains
     allocate(no_vars(0))
     call render_template_file(cfg%template_dir // '/' // name, no_vars, html, ok, errmsg)
     if (.not. ok) then
-      resp = error_response(500, errmsg)
+      resp = internal_error(errmsg)
       return
     end if
     resp = html_response(layout(html))
@@ -75,7 +76,7 @@ contains
 
     call search_marsupials(cfg%db_path, query, rows, ok, errmsg)
     if (.not. ok) then
-      resp = error_response(500, errmsg)
+      resp = internal_error(errmsg)
       return
     end if
     if (len_trim(query) == 0) then
@@ -96,7 +97,7 @@ contains
 
     call all_marsupials(cfg%db_path, rows, ok, errmsg)
     if (.not. ok) then
-      resp = error_response(500, errmsg)
+      resp = internal_error(errmsg)
       return
     end if
     resp = results_page(cfg, rows, '<p>No results in this database :-(</p>')
@@ -116,7 +117,7 @@ contains
     call render_template_file(cfg%template_dir // '/search.jade', no_vars, header, ok, errmsg)
     if (ok) call load_template(cfg%template_dir // '/result.jade', row_template, ok, errmsg)
     if (.not. ok) then
-      resp = error_response(500, errmsg)
+      resp = internal_error(errmsg)
       return
     end if
 
@@ -162,5 +163,15 @@ contains
            '</body>' // NL // &
            '</html>'
   end function layout
+
+  !> Log the detailed cause server-side; clients only see a generic message.
+  function internal_error(detail) result(resp)
+    character(len=*), intent(in) :: detail
+    type(response_t) :: resp
+
+    write (error_unit, '(a)') 'fortran_fcgi: ' // detail
+    flush (error_unit)
+    resp = error_response(500, 'Something went wrong. Please try again later.')
+  end function internal_error
 
 end module app
