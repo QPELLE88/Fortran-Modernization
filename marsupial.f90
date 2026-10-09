@@ -9,9 +9,10 @@ module marsupial
 
   type(SQLITE_DATABASE)                       :: db
   type(SQLITE_STATEMENT)                      :: stmt
-  type(SQLITE_COLUMN), dimension(:), pointer  :: column
+  type(SQLITE_COLUMN), dimension(:), pointer  :: column => null()
   integer                                     :: i
   logical                                     :: finished
+  logical                                     :: dbOpen = .false.
 
   contains
 
@@ -35,16 +36,15 @@ module marsupial
     ! If not found, we want to clear name so the caller knows.
     name = ""
 
-    call sqlite3_open('marsupials.sqlite3', db)
-
-    allocate( column(4) )
-    call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-    call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-    call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
-    call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
+    if (.not. openDatabase()) return
+    call allocateColumns()
 
     call string_replace(query, "'", "''")
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
+    if (sqlite3_error(db)) then
+      call releaseColumns()
+      return
+    endif
 
     i = 1
     do
@@ -57,21 +57,25 @@ module marsupial
       call sqlite3_get_column(column(4), description)
       exit
     end do
+
+    call sqlite3_finalize(stmt)
+    call releaseColumns()
   endsubroutine
 
   subroutine getAllMarsupials(name, latinName, wikiLink, description)
     ! columns
     character(len=50), dimension(8)	:: name, latinName, wikiLink, description
 
-    call sqlite3_open('marsupials.sqlite3', db)
+    name = ""
 
-    allocate( column(4) )
-    call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-    call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-    call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
-    call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
+    if (.not. openDatabase()) return
+    call allocateColumns()
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
+    if (sqlite3_error(db)) then
+      call releaseColumns()
+      return
+    endif
 
     i = 1
     do
@@ -83,6 +87,44 @@ module marsupial
       call sqlite3_get_column(column(3), wikiLink(i))
       call sqlite3_get_column(column(4), description(i))
       i = i + 1
+      if (i > size(name)) exit
     end do
+
+    call sqlite3_finalize(stmt)
+    call releaseColumns()
+  endsubroutine
+
+  ! Open the database once and reuse the handle for the life of the process.
+  logical function openDatabase()
+    if (.not. dbOpen) then
+      call sqlite3_open('marsupials.sqlite3', db)
+      if (sqlite3_error(db)) then
+        call sqlite3_close(db)
+      else
+        dbOpen = .true.
+      endif
+    endif
+    openDatabase = dbOpen
+  endfunction
+
+  subroutine allocateColumns()
+    call releaseColumns()
+    allocate( column(4) )
+    call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
+    call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
+    call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
+    call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
+  endsubroutine
+
+  subroutine releaseColumns()
+    if (associated(column)) deallocate(column)
+    nullify(column)
+  endsubroutine
+
+  subroutine closeDatabase()
+    if (dbOpen) then
+      call sqlite3_close(db)
+      dbOpen = .false.
+    endif
   endsubroutine
 endmodule
