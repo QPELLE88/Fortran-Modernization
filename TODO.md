@@ -1,13 +1,9 @@
 models
-- search is more flexible (LOWER function)
+- more columns / filters on the search
 
 views
-- spacing, commas, multiple params
-- HTML escaping
 - cool images for marsupial search
-- spaces, commas, dots, hashes in attributes
+- template includes / layouts
 
 docs
-- testing?
-- refresher / update
-- figure out how to get the sqlite c file in place
+- remove the vendored flibs-0.9 tree now that the app no longer links against it
