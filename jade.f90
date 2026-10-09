@@ -38,7 +38,9 @@ module jade
     open(newunit=templater, file=templatefile, status='old', action='read', iostat=io)
     templatefile = ''
     if (io /= 0) then
-      if (unitNo /= 0) then
+      if (unitNo == 0) then
+        templatefile = '<p>Template unavailable.</p>'
+      else
         write(unitNo, AFORMAT) '<p>Template unavailable.</p>'
       endif
       return

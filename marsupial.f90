@@ -98,9 +98,8 @@ module marsupial
   logical function openDatabase()
     if (.not. dbOpen) then
       call sqlite3_open('marsupials.sqlite3', db)
-      if (sqlite3_error(db)) then
-        call sqlite3_close(db)
-      else
+      ! On failure the C binding has already closed the handle; retry next request.
+      if (.not. sqlite3_error(db)) then
         dbOpen = .true.
       endif
     endif
