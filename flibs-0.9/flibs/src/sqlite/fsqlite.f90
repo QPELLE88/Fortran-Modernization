@@ -605,6 +605,48 @@ subroutine sqlite3_prepare_select( db, tablename, columns, stmt, extra_clause )
 
 end subroutine sqlite3_prepare_select
 
+! sqlite3_bind_text --
+!    Bind a character value to a parameter ("?") of a prepared statement
+! Arguments:
+!    db            Structure for the database
+!    stmt          Prepared statement
+!    colidx        Index of the parameter (1-based)
+!    value         Value to bind
+! Side effects:
+!    db%error is set to the SQLite return code
+!
+subroutine sqlite3_bind_text( db, stmt, colidx, value )
+   type(SQLITE_DATABASE)                       :: db
+   type(SQLITE_STATEMENT)                      :: stmt
+   integer, intent(in)                         :: colidx
+   character(len=*), intent(in)                :: value
+
+   interface
+      subroutine sqlite3_errmsg_c( handle, errmsg )
+         integer, dimension(*) :: handle
+         character(len=*)      :: errmsg
+      end subroutine sqlite3_errmsg_c
+   end interface
+
+   interface
+      integer function sqlite3_bind_text_c( handle, colidx, value )
+         integer, dimension(*) :: handle
+         integer               :: colidx
+         character(len=*)      :: value
+      end function sqlite3_bind_text_c
+   end interface
+
+   integer                                     :: idx
+
+   idx = colidx
+   db%error = sqlite3_bind_text_c( stmt%stmt_handle, idx, value )
+   if ( db%error .ne. 0 ) then
+      call sqlite3_errmsg_c( db%db_handle, db%errmsg )
+      call stringtof( db%errmsg )
+   endif
+
+end subroutine sqlite3_bind_text
+
 ! sqlite3_insert --
 !    Insert a row into the given table
 ! Arguments:
