@@ -918,6 +918,9 @@ subroutine sqlite3_prepare( db, command, stmt, columns )
             columns(i)%type_set = SQLITE_DOUBLE
          case( 'CHAR', 'VARC' )
             columns(i)%type_set = SQLITE_CHAR
+         case default
+            ! No or unrecognised declared type (e.g. expressions): read as text
+            columns(i)%type_set = SQLITE_CHAR
          end select
 
       enddo

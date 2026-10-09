@@ -74,6 +74,34 @@ static int callback(void *NotUsed, int argc, char **argv, char **azColName){
   return 0;
 }
 
+/* Copy a C string into a Fortran buffer, blank-padding the remainder.
+   SQLite returns NULL for SQL NULL values and undeclared column types;
+   these are treated as empty strings.
+*/
+static void copy_to_fortran( char *dest, const char *src, int len )
+{
+   int n ;
+
+   if ( dest == NULL || len <= 0 )
+   {
+      return ;
+   }
+
+   n = 0 ;
+   if ( src != NULL )
+   {
+      while ( n < len && src[n] != '\0' )
+      {
+         dest[n] = src[n] ;
+         n ++ ;
+      }
+   }
+   for ( ; n < len ; n ++ )
+   {
+      dest[n] = ' ' ;
+   }
+}
+
 int FTNCALL sqlite3_open_c_(
        char *fname,
 #ifdef INBETWEEN
@@ -172,7 +200,7 @@ void FTNCALL sqlite3_errmsg_c_(
    char *pstr ;
 
    pstr = sqlite3_errmsg( *db ) ;
-   strncpy( errmsg, pstr, len_errmsg ) ;
+   copy_to_fortran( errmsg, pstr, len_errmsg ) ;
 
    return ;
 }
@@ -224,11 +252,17 @@ void FTNCALL sqlite3_column_name_type_c_(
    char *pstr ;
 
    pstr = sqlite3_column_name(*stmt, *colidx ) ;
-   strncpy( name, pstr, len_name ) ;
-   name[len_name-1] = '\0' ;
+   copy_to_fortran( name, pstr, len_name ) ;
+   if ( len_name > 0 )
+   {
+      name[len_name-1] = '\0' ;
+   }
    pstr = sqlite3_column_decltype(*stmt, *colidx ) ;
-   strncpy( type, pstr, len_type ) ;
-   type[len_type-1] = '\0' ;
+   copy_to_fortran( type, pstr, len_type ) ;
+   if ( len_type > 0 )
+   {
+      type[len_type-1] = '\0' ;
+   }
    return ;
 }
 
@@ -311,7 +345,7 @@ int FTNCALL sqlite3_column_text_c_(
    char *pstr ;
 
    pstr = sqlite3_column_text(*stmt, *colidx ) ;
-   strncpy( text, pstr, len_text ) ;
+   copy_to_fortran( text, pstr, len_text ) ;
    return 0 ;
 }
 
@@ -352,7 +386,11 @@ void FTNCALL sqlite3_get_table_2_c_(
    int   i   ;
    int   j   ;
    int   k   ;
-   int   n   ;
+
+   if ( result == NULL )
+   {
+      return ;
+   }
 
    /* Note: one extra row! */
    for ( j = 0 ; j <= (*nrow) ; j ++ )
@@ -361,12 +399,7 @@ void FTNCALL sqlite3_get_table_2_c_(
       {
          k = i + j*(*ncol) ;
 
-         strncpy( &result_table[k*len_result], result[k], len_result ) ;
-
-         for ( n = strlen(result[k]) ; n < len_result ; n ++ )
-         {
-            result_table[k*len_result+n] = ' ' ;
-         }
+         copy_to_fortran( &result_table[k*len_result], result[k], len_result ) ;
       }
    }
 
