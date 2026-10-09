@@ -72,6 +72,8 @@ module fcgi_protocol
     character(len=MAX_CONTENT_LENGTH), private :: content
     integer, private                           :: iStat
 
+    private                                    :: fcgip_remark_text
+
 contains
 
     subroutine fcgip_make_dictionary( dict, unitNo )
@@ -109,22 +111,22 @@ contains
         endif
         iLen = len_trim(content)
         call cgi_store_dict( dict, content(:iLen) )
-        write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//content(:iLen)
+        write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//fcgip_remark_text(content(:iLen))
 
         ! QUERY_STRING (request method was GET) ?
         call get_environment_variable( "QUERY_STRING", value=content, length=iLen, status=iStat )
         if ( iStat == 0 ) then
-            write(unitNo, AFORMAT) '%REMARK% QUERY_STRING='//trim(content)
+            write(unitNo, AFORMAT) '%REMARK% QUERY_STRING='//fcgip_remark_text(trim(content))
             if ( iLen > 0 ) then
                     call cgi_store_dict( dict, content(:iLen) )
-                    write(unitNo, AFORMAT) '%REMARK% added to dictionary: QUERY_STRING='//content(:iLen)
+                    write(unitNo, AFORMAT) '%REMARK% added to dictionary: QUERY_STRING='//fcgip_remark_text(content(:iLen))
             end if
         endif
 
         ! anything in CONTENT_LENGTH (request method was POST) ?
         call get_environment_variable( "CONTENT_LENGTH", value=content, status=iStat )
         if ( iStat == 0 ) then
-            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//trim(content)
+            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//fcgip_remark_text(trim(content))
             iLen = len_trim(content)
             if ( iLen > 0 ) then
                 read( content, * ) iLen
@@ -134,7 +136,7 @@ contains
                 end do
                 content( iLen+1: ) = ' '
                 call cgi_store_dict( dict, content(:iLen) )
-                write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
+                write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//fcgip_remark_text(content(:iLen))
             end if
         endif
 
@@ -143,6 +145,25 @@ contains
         write(unitNo, AFORMAT) '%REMARK% completed dictionary...'
 
     end subroutine fcgip_make_dictionary
+
+
+    function fcgip_remark_text( text ) result( clean )
+        ! Request data written to a %REMARK% line must stay on that line:
+        !     an embedded CR/LF would start a new record that fcgip_put_file()
+        !     sends to the webserver, so control characters are replaced
+        character(len=*), intent(in) :: text
+        character(len=len(text))     :: clean
+
+        integer                      :: i
+        integer                      :: code
+
+        clean = text
+        do i = 1, len(clean)
+            code = iachar(clean(i:i))
+            if ( code < 32 .or. code == 127 ) clean(i:i) = '?'
+        end do
+
+    end function fcgip_remark_text
 
 
 
