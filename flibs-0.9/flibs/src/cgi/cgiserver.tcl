@@ -178,16 +178,16 @@ proc serve sock {
             set html 1
         }
         set inchan [open $name $perm]
-        puts $sock "HTTP/1.0 200 OK"
-        if { $html } {
-           puts $sock "Content-Type: text/html;charset=$::encoding\n"
-        }
         if { $exe } {
             puts "Executing program $name ..."
             sendHttpData $inchan $args
             waitForProgram
             close $inchan
             set inchan [open "cgiout"]
+        }
+        puts $sock "HTTP/1.0 200 OK"
+        if { $html } {
+           puts $sock "Content-Type: text/html;charset=$::encoding\n"
         }
 
         #
