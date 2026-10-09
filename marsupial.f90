@@ -31,6 +31,7 @@ module marsupial
     ! columns
     character(len=*)		  :: query
     character(len=50)			:: name, latinName, wikiLink, description
+    integer                             :: rc
 
     ! If not found, we want to clear name so the caller knows.
     name = ""
@@ -45,13 +46,17 @@ module marsupial
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER(?)) LIMIT 4")
     if ( sqlite3_error( db ) ) then
+      rc = db%error
       call sqlite3_close( db )
+      db%error = rc
       return
     endif
     call sqlite3_bind_text( db, stmt, 1, trim(query) )
     if ( sqlite3_error( db ) ) then
+      rc = db%error
       call sqlite3_finalize( stmt )
       call sqlite3_close( db )
+      db%error = rc
       return
     endif
 
