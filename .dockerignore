@@ -1,0 +1,6 @@
+.git
+build
+fortran_fcgi
+flibs-0.9
+*.o
+*.mod

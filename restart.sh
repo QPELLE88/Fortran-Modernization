@@ -1,13 +1,7 @@
 #!/bin/sh
-#
-# Restart fortran-machine
+# Rebuild fortran_fcgi and restart it under spawn-fcgi.
+set -e
 
-# Kill server, if running
-pkill -f fortran_fcgi
-
-# Recompile server
-rm fortran_fcgi
+pkill -x fortran_fcgi || true
 make
-
-# Respawn fcgi
 spawn-fcgi -a 127.0.0.1 -p 9000 ./fortran_fcgi
