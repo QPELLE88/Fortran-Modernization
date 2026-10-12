@@ -238,6 +238,8 @@ contains
     call check_equal(safe_wiki_path('/wiki/a//b'), '', 'empty segment dropped')
     call check_equal(safe_wiki_path('/wiki/a/..'), '', 'trailing dot segment dropped')
     call check_equal(safe_wiki_path('/wiki/a/.%2E/b'), '', 'mixed encoded dot segment dropped')
+    call check_equal(safe_wiki_path('/wiki/a%2F..%2Fw/index.php'), '', 'encoded slash dropped')
+    call check_equal(safe_wiki_path('/wiki/a%5c..'), '', 'encoded backslash dropped')
     call check_equal(safe_wiki_path('/wiki/../w/index.php'), '', 'dot segments dropped')
     call check_equal(safe_wiki_path('/wiki/%2E%2E/x'), '', 'encoded dot segments dropped')
     call check_equal(safe_wiki_path('/wiki/&#x2F;&#x2F;evil.example'), '', 'HTML entities dropped')

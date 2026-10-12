@@ -95,7 +95,8 @@ contains
   end subroutine grow
 
   !> Links are rendered under https://en.wikipedia.org, so only accept `/wiki/<title>`
-  !> paths made of URL-safe characters with no empty, `.` or `..` segments.
+  !> paths made of URL-safe characters, with no encoded separators and no empty,
+  !> `.` or `..` segments.
   function safe_wiki_path(link) result(path)
     character(len=*), intent(in) :: link
     character(len=:), allocatable :: path
@@ -109,6 +110,7 @@ contains
     rest = link(7:)
     if (len(rest) == 0) return
     if (verify(rest, ALLOWED) /= 0) return
+    if (index(to_lower(rest), '%2f') > 0 .or. index(to_lower(rest), '%5c') > 0) return
     do
       slash = index(rest, '/')
       if (slash == 0) then
