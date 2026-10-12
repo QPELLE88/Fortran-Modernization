@@ -37,51 +37,30 @@
         </div>
       </div>
       <div class="row">
-        <p>The controller is written in Fortran itself:</p>
-        <p>Here is an example where you write HTML using multiline strings:</p>
+        <p>The controller is written in Fortran itself, in <code>handle_request</code> in
+        <code>src/app.f90</code>. Each route appends HTML to a growable <code>string_buffer</code>
+        and sets the response status:</p>
 <pre>
-case ('/html')
-  ! HTML
-  write(unitNo,AFORMAT) '&lt;div class="container"&gt;' // &
-    '&lt;h1&gt;Hello World&lt;/h1&gt;' // &
-    '&lt;/div&gt;'
+select case (req%path)
+case (&#x27;/&#x27;)
+  call append_template(ctx, page, &#x27;index.jade&#x27;, ok, res)
+case (&#x27;/hello&#x27;)
+  call page%append(&#x27;&lt;h1&gt;Hello, &#x27; // html_escape(params%get(&#x27;name&#x27;, &#x27;world&#x27;)) // &#x27;!&lt;/h1&gt;&#x27;)
+  ok = .true.
+case default
+  res%status = 404
+  res%body = error_page(res%status)
+  return
+end select
 </pre>
-        <p>Here is an example where you load a Jade template:</p>
+        <p>A search route gets input from the URL, asks the model, and renders a template per result:</p>
 <pre>
-case ('/')
-  ! most pages look like this
-  templatefile = 'template/index.jade'
-  call jadefile(templatefile, unitNo)
-</pre>
-        <p>You have access to URL variables:</p>
-<pre>
-case ('/search')
-  call cgi_get(dict, 'q', query)
-  call calculate(query)
-</pre>
-        <p>Jade files can also have template strings with each variable in a #{template}. Pass variables using the pagevars 2D array.<p>
-<pre>
-case ('/profile')
-  pagevars(1,1) = 'name'
-  pagevars(1,2) = 'Nick'
-  templatefile = 'template/profile.jade'
-  call jadetemplate(templatefile, unitNo, pagevars)
-</pre>
-        <p>In searches Fortran.io controller gets input from the model and URL variables, and displays it in the view.</p>
-<pre>
-case ('/search')
-  pagevars(1,1) = 'name'
-  pagevars(2,1) = 'latinName'
-  call cgi_get( dict, 'q', query)
-  call getOneMarsupial(query, pagevars(1,2), pagevars(2,2))
-
-  if (len(trim(name)) == 0) then
-    write(unitNo,AFORMAT) '<p>No results in this database :-(</p>'
-  else
-    ! template with string
-    templatefile = 'template/result.jade'
-    call jadetemplate(templatefile, unitNo, pagevars)
-  endif
+call find_marsupials(ctx%db, params%get(&#x27;q&#x27;), found, ok)
+do i = 1, size(found)
+  call vars%set(&#x27;name&#x27;, found(i)%name)
+  call vars%set(&#x27;latinName&#x27;, found(i)%latin_name)
+  call page%append(render_source(result_template, vars))
+end do
 </pre>
       </div>
     </div>

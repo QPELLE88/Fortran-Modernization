@@ -38,7 +38,7 @@
       </div>
       <div class="row">
         <p>The easiest way to serve files is to put them into the static directory.</p>
-        <p>For more dynamic and readable layouts, you can use an HTML templating system similar to Jade or HAML:</p>
+        <p>For more dynamic and readable layouts, use the Jade-style templates in <code>template/</code>:</p>
 <pre>
 body
   h1 Hello World
@@ -48,37 +48,24 @@ body
     li
       a(href="http://example.com") Link
 </pre>
-        <p>You can insert variable names into your template:</p>
+        <p>You can insert variables into text and attribute values. Their values are HTML-escaped:</p>
 <pre>
 h4
   span #{name}
   small #{occupation}
 </pre>
-
-        <p>Control functions (for / if - else - endif) and container divs should be printed directly in the controller.</p>
-        <p>This is also where you pass info to the template engine:</p>
+        <p>Loops, conditionals and container divs belong in the controller, which also passes
+        variables to the template engine:</p>
 <pre>
-! open .container
-write(unitNo,AFORMAT) '&lt;div class="container"&gt;'
+type(string_map) :: vars
 
-! use a 2D array for key-value pairs -
-pagevars(1,1) = 'name'
-pagevars(1,2) = 'Nick'
-pagevars(2,1) = 'occupation'
-pagevars(2,2) = 'mapmaker'
+call vars%set(&#x27;name&#x27;, &#x27;Nick&#x27;)
+call vars%set(&#x27;occupation&#x27;, params%get(&#x27;job&#x27;, &#x27;mapmaker&#x27;))   ! ?job=... from the URL
 
-! use URL variable ?lang=__ to fill in this variable
-call cgi_get(dict, 'lang', language)
-
-if (language == 'english') then
-  templatefile = 'template/result-english.jade'
-else
-  templatefile = 'template/result-spanish.jade'
-endif
-call jadetemplate(templatefile, unitNo, pagevars)
-
-! close .container
-write(unitNo,AFORMAT) '&lt;/div&gt;'
+call page%append(&#x27;&lt;div class=&quot;container&quot;&gt;&#x27;)
+call render_template(&#x27;template/profile.jade&#x27;, vars, html, ok)
+call page%append(html)
+call page%append(&#x27;&lt;/div&gt;&#x27;)
 </pre>
       </div>
     </div>

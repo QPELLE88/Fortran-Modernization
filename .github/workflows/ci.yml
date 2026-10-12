@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran make libfcgi-dev libsqlite3-dev nginx spawn-fcgi curl
+      - name: Build (strict F2018, warnings are errors)
+        run: make
+      - name: Unit tests (runtime checks enabled)
+        run: make test
+      - name: End-to-end tests (nginx + spawn-fcgi)
+        run: make e2e
+
+  docker:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t fortran-io .
+      - name: Smoke test image
+        run: |
+          docker run -d --name fortran-io -p 8080:80 fortran-io
+          for i in $(seq 30); do curl -sf http://127.0.0.1:8080/ >/dev/null && break; sleep 1; done
+          curl -sf "http://127.0.0.1:8080/search?q=koala" | grep -q "Phascolarctos cinereus"
+          docker rm -f fortran-io

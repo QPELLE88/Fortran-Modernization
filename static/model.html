@@ -37,40 +37,33 @@
         </div>
       </div>
       <div class="row">
-        <p>The model uses FLIBS Fortran module and C files to talk to SQLite. You should create
-        the database, tables, and content ahead of time.</p>
-        <p>You should base your model on marsupial.f90 to make sure it includes the right features.
-        Here's how you can design a subroutine "getOneMarsupial"</p>
+        <p>The model talks to SQLite through <code>src/sqlite_db.f90</code>, a small
+        <code>iso_c_binding</code> interface to libsqlite3. Create the database, tables and
+        content ahead of time; the app opens it read-only at startup.</p>
+        <p>Base your model on <code>src/marsupials.f90</code>. Always use prepared statements with
+        bound parameters and finalize them when you are done:</p>
 <pre>
-subroutine getOneMarsupial(query, name, latinName)
-  ! expect the query
-  character(len=*)		  :: query
-  ! define the column return values
-  character(len=50)			:: name, latinName
+subroutine find_by_name(db, query, names, ok)
+  type(database), intent(inout) :: db
+  character(len=*), intent(in) :: query
+  type(kv_pair), allocatable, intent(out) :: names(:)
+  logical, intent(out) :: ok
+  type(statement) :: stmt
+  integer :: rc
 
-  ! connect to your database
-  call sqlite3_open('marsupials.sqlite3', db)
+  ok = .false.
+  if (db%prepare(&#x27;SELECT name, latinName FROM marsupials WHERE name = ?1&#x27;, stmt) /= SQLITE_OK) return
+  rc = stmt%bind_text(1, query)       ! never concatenate user input into SQL
 
-  ! prepares query
-  allocate( column(2) )
-  call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-  call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
-
-  ! actual query - where clause to the end
-  call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE name = '" // trim(query) // "'")
-
-  i = 1
+  allocate(names(0))
   do
-    ! iterate to end of returned rows
-    call sqlite3_next_row(stmt, column, finished)
-    if (finished) exit
-
-    ! use column array to fill in name and latinName
-    call sqlite3_get_column(column(1), name)
-    call sqlite3_get_column(column(2), latinName)
-    i = i + 1
+    rc = stmt%step()
+    if (rc /= SQLITE_ROW) exit
+    names = [names, kv_pair(stmt%column_text(0), stmt%column_text(1))]
   end do
-endsubroutine
+  call stmt%finalize()
+  ok = rc == SQLITE_DONE
+end subroutine find_by_name
 </pre>
       </div>
     </div>

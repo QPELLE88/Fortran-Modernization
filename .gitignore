@@ -1,6 +1,5 @@
 *.o
 *.mod
 .DS_Store
+build/
 fortran_fcgi
-*.c
-*.a
