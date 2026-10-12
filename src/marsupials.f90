@@ -1,11 +1,11 @@
 !> Model: marsupial records stored in the `marsupials` SQLite table.
 module marsupials
   use sqlite_db, only: database, statement, SQLITE_OK, SQLITE_ROW, SQLITE_DONE
-  use strings, only: starts_with
+  use strings, only: starts_with, to_lower
   implicit none
   private
 
-  public :: marsupial, find_marsupials, list_marsupials
+  public :: marsupial, find_marsupials, list_marsupials, safe_wiki_path
 
   integer, parameter, public :: MAX_SEARCH_RESULTS = 50, MAX_LIST_RESULTS = 1000
 
@@ -22,49 +22,56 @@ module marsupials
 contains
 
   !> Marsupials whose name contains `query` (case-insensitive), in table order.
-  subroutine find_marsupials(db, query, results, ok)
+  !> At most MAX_SEARCH_RESULTS rows; `truncated` is set when more rows match.
+  subroutine find_marsupials(db, query, results, ok, truncated)
     type(database), intent(inout) :: db
     character(len=*), intent(in) :: query
     type(marsupial), allocatable, intent(out) :: results(:)
-    logical, intent(out) :: ok
+    logical, intent(out) :: ok, truncated
 
     call run_query(db, SELECT_COLUMNS // &
       'WHERE instr(lower(name), lower(?1)) > 0 ORDER BY rowid LIMIT ?2', &
-      query, MAX_SEARCH_RESULTS, results, ok)
+      query, MAX_SEARCH_RESULTS, results, ok, truncated)
   end subroutine find_marsupials
 
-  !> Every marsupial, in table order.
-  subroutine list_marsupials(db, results, ok)
+  !> Marsupials in table order, at most MAX_LIST_RESULTS; `truncated` is set when more exist.
+  subroutine list_marsupials(db, results, ok, truncated)
     type(database), intent(inout) :: db
     type(marsupial), allocatable, intent(out) :: results(:)
-    logical, intent(out) :: ok
+    logical, intent(out) :: ok, truncated
 
-    call run_query(db, SELECT_COLUMNS // 'ORDER BY rowid LIMIT ?2', '', MAX_LIST_RESULTS, results, ok)
+    call run_query(db, SELECT_COLUMNS // 'ORDER BY rowid LIMIT ?2', '', MAX_LIST_RESULTS, results, ok, truncated)
   end subroutine list_marsupials
 
-  subroutine run_query(db, sql, text_param, limit, results, ok)
+  subroutine run_query(db, sql, text_param, limit, results, ok, truncated)
     type(database), intent(inout) :: db
     character(len=*), intent(in) :: sql, text_param
     integer, intent(in) :: limit
     type(marsupial), allocatable, intent(out) :: results(:)
-    logical, intent(out) :: ok
+    logical, intent(out) :: ok, truncated
     type(statement) :: stmt
     type(marsupial), allocatable :: grown(:)
     integer :: rc, count
 
     allocate(results(0))
     ok = .false.
+    truncated = .false.
     if (.not. db%is_open()) return
     if (db%prepare(sql, stmt) /= SQLITE_OK) return
 
     if (index(sql, '?1') > 0) rc = stmt%bind_text(1, text_param)
-    rc = stmt%bind_int(2, limit)
+    rc = stmt%bind_int(2, limit + 1)
 
     allocate(grown(8))
     count = 0
     do
       rc = stmt%step()
       if (rc /= SQLITE_ROW) exit
+      if (count == limit) then
+        truncated = .true.
+        rc = SQLITE_DONE
+        exit
+      end if
       if (count == size(grown)) call grow(grown)
       count = count + 1
       grown(count)%name = stmt%column_text(0)
@@ -87,16 +94,22 @@ contains
     call move_alloc(bigger, items)
   end subroutine grow
 
-  !> Links are rendered under https://en.wikipedia.org, so only accept article paths.
+  !> Links are rendered under https://en.wikipedia.org, so only accept a single
+  !> `/wiki/<article>` segment made of URL-safe characters. Anything else is dropped.
   function safe_wiki_path(link) result(path)
     character(len=*), intent(in) :: link
     character(len=:), allocatable :: path
+    character(len=*), parameter :: ALLOWED = &
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.,()%:' // "'"
+    character(len=:), allocatable :: article
 
-    if (starts_with(link, '/wiki/')) then
-      path = link
-    else
-      path = ''
-    end if
+    path = ''
+    if (.not. starts_with(link, '/wiki/')) return
+    article = link(7:)
+    if (len(article) == 0) return
+    if (verify(article, ALLOWED) /= 0) return
+    if (article(1:1) == '.' .or. starts_with(to_lower(article), '%2e')) return
+    path = link
   end function safe_wiki_path
 
 end module marsupials

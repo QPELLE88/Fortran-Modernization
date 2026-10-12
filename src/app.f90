@@ -97,6 +97,7 @@ contains
     type(http_response), intent(inout) :: res
     type(marsupial), allocatable :: found(:)
     type(string_map) :: vars
+    logical :: truncated
 
     call page%append('<div class="container">' // achar(10))
     call vars%set('q', query)
@@ -106,13 +107,14 @@ contains
     if (is_blank(query)) then
       call page%append('<p>Type a marsupial name to search.</p>' // achar(10))
     else
-      call find_marsupials(ctx%db, trim(adjustl(query)), found, ok)
+      call find_marsupials(ctx%db, trim(adjustl(query)), found, ok, truncated)
       if (.not. ok) then
         res%log = 'search query failed: ' // ctx%db%errmsg()
         return
       end if
       call append_results(ctx, page, found, query, ok, res)
       if (.not. ok) return
+      if (truncated) call page%append(truncation_notice(size(found)))
     end if
     call page%append('</div>' // achar(10))
   end subroutine search_page
@@ -124,21 +126,31 @@ contains
     type(http_response), intent(inout) :: res
     type(marsupial), allocatable :: found(:)
     type(string_map) :: vars
+    logical :: truncated
 
     call page%append('<div class="container">' // achar(10))
     call vars%set('q', '')
     call append_template(ctx, page, 'search.jade', ok, res, vars)
     if (.not. ok) return
 
-    call list_marsupials(ctx%db, found, ok)
+    call list_marsupials(ctx%db, found, ok, truncated)
     if (.not. ok) then
       res%log = 'list query failed: ' // ctx%db%errmsg()
       return
     end if
     call append_results(ctx, page, found, '', ok, res)
     if (.not. ok) return
+    if (truncated) call page%append(truncation_notice(size(found)))
     call page%append('</div>' // achar(10))
   end subroutine all_page
+
+  function truncation_notice(shown) result(html)
+    integer, intent(in) :: shown
+    character(len=:), allocatable :: html
+
+    html = '<p class="text-muted">Showing the first ' // int_to_str(shown) // &
+           ' results; refine your search to see more.</p>' // achar(10)
+  end function truncation_notice
 
   subroutine append_results(ctx, page, found, query, ok, res)
     type(app_context), intent(inout) :: ctx

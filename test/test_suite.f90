@@ -4,7 +4,8 @@ program test_suite
   use kv_list, only: string_map, parse_urlencoded, MAX_FORM_FIELDS
   use sqlite_db, only: database, SQLITE_OK, SQLITE_OPEN_READWRITE, SQLITE_OPEN_CREATE
   use jade, only: render_source, render_template
-  use marsupials, only: marsupial, find_marsupials, list_marsupials
+  use marsupials, only: marsupial, find_marsupials, list_marsupials, safe_wiki_path, &
+    MAX_SEARCH_RESULTS, MAX_LIST_RESULTS
   use app, only: app_context, http_request, http_response, handle_request, response_headers
   implicit none
 
@@ -161,43 +162,84 @@ contains
     character(len=*), parameter :: path = 'build/test/fixture.sqlite3'
     type(database) :: db
     type(marsupial), allocatable :: found(:)
-    logical :: ok
+    logical :: ok, truncated
     integer :: i
 
     call make_fixture_db(path)
     call check(db%open(path) == SQLITE_OK, 'open fixture read-only')
 
-    call find_marsupials(db, 'koala', found, ok)
+    call find_marsupials(db, 'koala', found, ok, truncated)
     call check(ok .and. size(found) == 1, 'exact search')
     if (size(found) == 1) call check_equal(found(1)%latin_name, 'Phascolarctos cinereus', 'search row content')
-    call find_marsupials(db, 'KANG', found, ok)
+    call find_marsupials(db, 'KANG', found, ok, truncated)
     call check(ok .and. size(found) == 1, 'case-insensitive search')
-    call find_marsupials(db, 'o', found, ok)
+    call find_marsupials(db, 'o', found, ok, truncated)
     call check(ok .and. size(found) == 4, 'search returns every match')
-    call find_marsupials(db, "' OR 1=1 --", found, ok)
+    call find_marsupials(db, "' OR 1=1 --", found, ok, truncated)
     call check(ok .and. size(found) == 0, 'SQL injection is inert')
-    call find_marsupials(db, "quokka's", found, ok)
+    call find_marsupials(db, "quokka's", found, ok, truncated)
     call check(ok .and. size(found) == 1, 'quotes are matched literally')
     if (size(found) == 1) call check_equal(found(1)%wiki_link, '', 'non-wiki links are dropped')
-    call find_marsupials(db, '%', found, ok)
+    call find_marsupials(db, '%', found, ok, truncated)
     call check(ok .and. size(found) == 0, 'percent is not a wildcard')
 
-    call list_marsupials(db, found, ok)
-    call check(ok .and. size(found) == 4, 'list returns every row')
+    call list_marsupials(db, found, ok, truncated)
+    call check(ok .and. size(found) == 4 .and. .not. truncated, 'list returns every row')
     if (size(found) == 4) then
       call check_equal(found(4)%name, 'wombat', 'last row is listed')
       call check_equal(found(4)%description, '', 'NULL column reads as empty')
     end if
 
     do i = 1, 2000
-      call find_marsupials(db, 'wom', found, ok)
+      call find_marsupials(db, 'wom', found, ok, truncated)
     end do
     call check(ok .and. db%open_statements() == 0, 'statements are finalized')
     call db%close()
 
-    call find_marsupials(db, 'koala', found, ok)
+    call find_marsupials(db, 'koala', found, ok, truncated)
     call check(.not. ok .and. size(found) == 0, 'closed database reports failure')
+
+    call test_truncation()
+    call test_wiki_paths()
   end subroutine test_model
+
+  subroutine test_truncation()
+    character(len=*), parameter :: path = 'build/test/bulk.sqlite3'
+    type(database) :: db
+    type(marsupial), allocatable :: found(:)
+    logical :: ok, truncated
+    integer :: rc
+
+    open(newunit=rc, file=path, status='replace')
+    close(rc, status='delete')
+    call check(db%open(path, SQLITE_OPEN_READWRITE + SQLITE_OPEN_CREATE) == SQLITE_OK, 'create bulk database')
+    rc = db%exec('CREATE TABLE marsupials (name, latinName, wikiLink, description);' // &
+                 'WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < ' // &
+                 '1001) INSERT INTO marsupials SELECT ''bulk'' || x, '''', '''', '''' FROM n;')
+    call check(rc == SQLITE_OK, 'seed bulk database')
+
+    call list_marsupials(db, found, ok, truncated)
+    call check(ok .and. size(found) == MAX_LIST_RESULTS .and. truncated, 'list over the cap is flagged')
+    call find_marsupials(db, 'bulk', found, ok, truncated)
+    call check(ok .and. size(found) == MAX_SEARCH_RESULTS .and. truncated, 'search over the cap is flagged')
+    call find_marsupials(db, 'bulk1000', found, ok, truncated)
+    call check(ok .and. size(found) == 1 .and. .not. truncated, 'search under the cap is not flagged')
+    call check(db%open_statements() == 0, 'truncated queries finalize their statements')
+    call db%close()
+  end subroutine test_truncation
+
+  subroutine test_wiki_paths()
+    call check_equal(safe_wiki_path('/wiki/Koala'), '/wiki/Koala', 'plain article path kept')
+    call check_equal(safe_wiki_path("/wiki/Leadbeater%27s_possum"), '/wiki/Leadbeater%27s_possum', &
+                     'percent-encoded article kept')
+    call check_equal(safe_wiki_path('/wiki/'), '', 'empty article dropped')
+    call check_equal(safe_wiki_path('/wiki/../w/index.php'), '', 'dot segments dropped')
+    call check_equal(safe_wiki_path('/wiki/%2E%2E/x'), '', 'encoded dot segments dropped')
+    call check_equal(safe_wiki_path('/wiki/&#x2F;&#x2F;evil.example'), '', 'HTML entities dropped')
+    call check_equal(safe_wiki_path('/wiki/x"onmouseover=alert(1)'), '', 'quotes dropped')
+    call check_equal(safe_wiki_path('/wiki/a\\b'), '', 'backslashes dropped')
+    call check_equal(safe_wiki_path('//evil.example/wiki/x'), '', 'protocol-relative dropped')
+  end subroutine test_wiki_paths
 
   function request(method, path, query, body, content_type) result(req)
     character(len=*), intent(in) :: method, path, query
