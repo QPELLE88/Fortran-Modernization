@@ -232,7 +232,12 @@ contains
     call check_equal(safe_wiki_path('/wiki/Koala'), '/wiki/Koala', 'plain article path kept')
     call check_equal(safe_wiki_path("/wiki/Leadbeater%27s_possum"), '/wiki/Leadbeater%27s_possum', &
                      'percent-encoded article kept')
+    call check_equal(safe_wiki_path('/wiki/AC/DC'), '/wiki/AC/DC', 'slash inside a title kept')
+    call check_equal(safe_wiki_path('/wiki/.hack'), '/wiki/.hack', 'leading dot in a title kept')
     call check_equal(safe_wiki_path('/wiki/'), '', 'empty article dropped')
+    call check_equal(safe_wiki_path('/wiki/a//b'), '', 'empty segment dropped')
+    call check_equal(safe_wiki_path('/wiki/a/..'), '', 'trailing dot segment dropped')
+    call check_equal(safe_wiki_path('/wiki/a/.%2E/b'), '', 'mixed encoded dot segment dropped')
     call check_equal(safe_wiki_path('/wiki/../w/index.php'), '', 'dot segments dropped')
     call check_equal(safe_wiki_path('/wiki/%2E%2E/x'), '', 'encoded dot segments dropped')
     call check_equal(safe_wiki_path('/wiki/&#x2F;&#x2F;evil.example'), '', 'HTML entities dropped')

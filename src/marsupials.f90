@@ -94,22 +94,44 @@ contains
     call move_alloc(bigger, items)
   end subroutine grow
 
-  !> Links are rendered under https://en.wikipedia.org, so only accept a single
-  !> `/wiki/<article>` segment made of URL-safe characters. Anything else is dropped.
+  !> Links are rendered under https://en.wikipedia.org, so only accept `/wiki/<title>`
+  !> paths made of URL-safe characters with no empty, `.` or `..` segments.
   function safe_wiki_path(link) result(path)
     character(len=*), intent(in) :: link
     character(len=:), allocatable :: path
     character(len=*), parameter :: ALLOWED = &
-      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.,()%:' // "'"
-    character(len=:), allocatable :: article
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.,()%:/' // "'"
+    character(len=:), allocatable :: rest, segment
+    integer :: slash
 
     path = ''
     if (.not. starts_with(link, '/wiki/')) return
-    article = link(7:)
-    if (len(article) == 0) return
-    if (verify(article, ALLOWED) /= 0) return
-    if (article(1:1) == '.' .or. starts_with(to_lower(article), '%2e')) return
+    rest = link(7:)
+    if (len(rest) == 0) return
+    if (verify(rest, ALLOWED) /= 0) return
+    do
+      slash = index(rest, '/')
+      if (slash == 0) then
+        segment = rest
+      else
+        segment = rest(:slash - 1)
+      end if
+      if (is_dot_segment(to_lower(segment))) return
+      if (slash == 0) exit
+      rest = rest(slash + 1:)
+    end do
     path = link
   end function safe_wiki_path
+
+  logical function is_dot_segment(segment)
+    character(len=*), intent(in) :: segment
+
+    select case (segment)
+    case ('', '.', '..', '%2e', '.%2e', '%2e.', '%2e%2e')
+      is_dot_segment = .true.
+    case default
+      is_dot_segment = .false.
+    end select
+  end function is_dot_segment
 
 end module marsupials
