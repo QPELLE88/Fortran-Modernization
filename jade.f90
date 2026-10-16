@@ -13,15 +13,10 @@ module jade
 
     call jadefile(templatefile, 0)
 
-    i = 1
-    do
-      if ((i > 10) .or. (replacements(i,1) == '')) then
-        exit
-      endif
+    do i = 1, size(replacements, 1)
+      if (replacements(i,1) == '') exit
 
       call string_replace(templatefile, '#{' // trim(replacements(i, 1)) // '}', trim(replacements(i, 2)))
-
-      i = i + 1
     enddo
     write(unitNo, AFORMAT) templatefile
   endsubroutine
