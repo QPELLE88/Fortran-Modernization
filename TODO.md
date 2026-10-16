@@ -3,7 +3,6 @@ models
 
 views
 - spacing, commas, multiple params
-- HTML escaping
 - cool images for marsupial search
 - spaces, commas, dots, hashes in attributes
 

@@ -87,6 +87,8 @@ contains
             '</head>', &
             '<body>'
 
+        pagevars = ''
+
         ! retrieve script name (key=DOCUMENT_URI) from dictionary
         call cgi_get( dict, "DOCUMENT_URI", scriptName )
 

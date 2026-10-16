@@ -3,28 +3,307 @@ module jade
 
   implicit none
 
+  private :: find_key, escape_for_context, placeholder_context, &
+    is_url_attribute, url_escape, has_unsafe_scheme
+
+  integer, parameter, private :: CTX_TEXT = 0, CTX_ATTR = 1, &
+    CTX_ATTR_UNQUOTED = 2, CTX_RAWTEXT = 3
+
   contains
 
+  ! Renders a Jade template, then fills each #{key} with the matching value
+  ! from replacements(:,2), escaped for where it lands in the HTML (text,
+  ! attribute, URL attribute). Values are inserted in a single pass, so a
+  ! value containing #{...} is never expanded. Unknown keys are left as is.
   subroutine jadetemplate(templatefile, unitNo, replacements)
     character(len=10000)         :: templatefile
-    integer                      :: unitNo, i
+    integer                      :: unitNo, i, k, n, p, start, keyEnd
     character(len=*), dimension(10,2)    :: replacements
     character(len=3)   :: AFORMAT = '(a)'
+    character(len=:), allocatable :: rendered, piece
 
     call jadefile(templatefile, 0)
 
-    i = 1
-    do
-      if ((i > 10) .or. (replacements(i,1) == '')) then
-        exit
+    rendered = ''
+    n = len_trim(templatefile)
+    p = 1
+    do while (p <= n)
+      start = index(templatefile(p:n), '#{')
+      if (start == 0) exit
+      start = p + start - 1
+      keyEnd = index(templatefile(start + 2:n), '}')
+      if (keyEnd == 0) exit
+      keyEnd = start + 1 + keyEnd
+      ! an unclosed "#{" before this one is literal text
+      k = index(templatefile(start + 2:keyEnd - 1), '#{', back=.true.)
+      if (k > 0) start = start + 1 + k
+
+      piece = templatefile(p:start - 1)
+      rendered = rendered // piece
+
+      i = find_key(replacements, templatefile(start + 2:keyEnd - 1))
+      if (i > 0) then
+        piece = escape_for_context(rendered, trim(replacements(i, 2)))
+      else
+        piece = templatefile(start:keyEnd)
       endif
+      rendered = rendered // piece
+      p = keyEnd + 1
+    enddo
+    if (p <= n) then
+      piece = templatefile(p:n)
+      rendered = rendered // piece
+    endif
+    write(unitNo, AFORMAT) rendered
+  endsubroutine
 
-      call string_replace(templatefile, '#{' // trim(replacements(i, 1)) // '}', trim(replacements(i, 2)))
+  integer function find_key(replacements, key)
+    character(len=*), dimension(:,:), intent(in) :: replacements
+    character(len=*), intent(in)                 :: key
+    integer                                      :: i
 
+    find_key = 0
+    if (len_trim(key) == 0) return
+    do i = 1, size(replacements, 1)
+      if (replacements(i, 1) == '') exit
+      if (replacements(i, 1) == key) then
+        find_key = i
+        return
+      endif
+    enddo
+  endfunction
+
+  ! escapes value for the HTML context at the end of html
+  function escape_for_context(html, value) result(escaped)
+    character(len=*), intent(in)  :: html, value
+    character(len=:), allocatable :: escaped, attrValue, encoded
+    integer                       :: ctx
+    logical                       :: isUrl
+
+    call placeholder_context(html, ctx, isUrl, attrValue)
+    select case (ctx)
+      case (CTX_TEXT)
+        escaped = html_escape(value)
+      case (CTX_ATTR)
+        if (isUrl) then
+          encoded = url_escape(attrValue, value)
+          escaped = html_escape(encoded)
+        else
+          escaped = html_escape(value)
+        endif
+      case (CTX_ATTR_UNQUOTED)
+        if (isUrl) then
+          encoded = url_escape(attrValue, value)
+          escaped = html_escape_strict(encoded)
+        else
+          escaped = html_escape_strict(value)
+        endif
+      case default
+        ! inside <script>, <style> or a comment: no safe encoding here
+        escaped = ''
+    end select
+  endfunction
+
+  ! scans html (output so far) to find where the next character would land
+  subroutine placeholder_context(html, ctx, isUrl, attrValue)
+    character(len=*), intent(in)               :: html
+    integer, intent(out)                       :: ctx
+    logical, intent(out)                       :: isUrl
+    character(len=:), allocatable, intent(out) :: attrValue
+
+    integer, parameter :: S_TEXT = 0, S_TAGNAME = 1, S_BEFORE_ATTR = 2, &
+      S_ATTRNAME = 3, S_AFTER_EQ = 4, S_QUOTED = 5, S_UNQUOTED = 6
+    character(len=*), parameter :: SPACES = ' ' // achar(9) // achar(10) // &
+      achar(12) // achar(13)
+    character(len=:), allocatable :: lower, tagName, attrName
+    character(len=1)   :: c, quote
+    integer            :: i, k, n, state, tagStart, nameStart, valueStart
+    logical            :: tagClosed
+
+    lower = to_lower(html)
+    n = len(html)
+    state = S_TEXT
+    tagName = ''
+    attrName = ''
+    attrValue = ''
+    quote = '"'
+    tagStart = 1
+    nameStart = 1
+    valueStart = 1
+    isUrl = .false.
+    ctx = CTX_RAWTEXT
+
+    i = 1
+    do while (i <= n)
+      c = html(i:i)
+      tagClosed = .false.
+      select case (state)
+        case (S_TEXT)
+          if (c == '<') then
+            if (i + 3 <= n) then
+              if (html(i:i + 3) == '<!--') then
+                k = index(html(i + 4:), '-->')
+                if (k == 0) return
+                i = i + 4 + k + 2
+                cycle
+              endif
+            endif
+            state = S_TAGNAME
+            tagStart = i + 1
+          endif
+        case (S_TAGNAME)
+          if (index(SPACES, c) > 0 .or. c == '>') then
+            tagName = lower(tagStart:i - 1)
+            state = S_BEFORE_ATTR
+            tagClosed = (c == '>')
+          endif
+        case (S_BEFORE_ATTR)
+          if (c == '>') then
+            tagClosed = .true.
+          elseif (c == '=') then
+            state = S_AFTER_EQ
+          elseif (index(SPACES, c) == 0 .and. c /= '/') then
+            nameStart = i
+            state = S_ATTRNAME
+          endif
+        case (S_ATTRNAME)
+          if (c == '=' .or. c == '>' .or. index(SPACES, c) > 0) then
+            attrName = lower(nameStart:i - 1)
+            state = S_BEFORE_ATTR
+            if (c == '=') state = S_AFTER_EQ
+            tagClosed = (c == '>')
+          endif
+        case (S_AFTER_EQ)
+          if (c == '"' .or. c == "'") then
+            quote = c
+            valueStart = i + 1
+            state = S_QUOTED
+          elseif (c == '>') then
+            tagClosed = .true.
+          elseif (index(SPACES, c) == 0) then
+            valueStart = i
+            state = S_UNQUOTED
+          endif
+        case (S_QUOTED)
+          if (c == quote) state = S_BEFORE_ATTR
+        case (S_UNQUOTED)
+          if (c == '>') then
+            tagClosed = .true.
+          elseif (index(SPACES, c) > 0) then
+            state = S_BEFORE_ATTR
+          endif
+      end select
+
+      if (tagClosed) then
+        state = S_TEXT
+        if (tagName == 'script' .or. tagName == 'style') then
+          k = index(lower(i + 1:), '</' // tagName)
+          if (k == 0) return
+          i = i + k
+          cycle
+        endif
+      endif
       i = i + 1
     enddo
-    write(unitNo, AFORMAT) templatefile
+
+    select case (state)
+      case (S_TEXT)
+        ctx = CTX_TEXT
+      case (S_QUOTED)
+        ctx = CTX_ATTR
+        attrValue = html(valueStart:n)
+        isUrl = is_url_attribute(attrName)
+      case (S_UNQUOTED)
+        ctx = CTX_ATTR_UNQUOTED
+        attrValue = html(valueStart:n)
+        isUrl = is_url_attribute(attrName)
+      case (S_AFTER_EQ)
+        ctx = CTX_ATTR_UNQUOTED
+        isUrl = is_url_attribute(attrName)
+      case default
+        ! tag or attribute name position
+        ctx = CTX_ATTR_UNQUOTED
+    end select
   endsubroutine
+
+  logical function is_url_attribute(name)
+    character(len=*), intent(in) :: name
+
+    select case (name)
+      case ('href', 'src', 'action', 'formaction', 'poster', 'cite', &
+            'background', 'data', 'codebase', 'longdesc', 'usemap', &
+            'ping', 'manifest', 'xlink:href')
+        is_url_attribute = .true.
+      case default
+        is_url_attribute = .false.
+    end select
+  endfunction
+
+  ! percent-encodes value for a URL attribute whose text so far is prefix,
+  ! so the value cannot pick the scheme or (after a fixed host) the host
+  function url_escape(prefix, value) result(encoded)
+    character(len=*), intent(in)  :: prefix, value
+    character(len=:), allocatable :: encoded, pre, joined
+    character(len=*), parameter   :: RESERVED = ":/?#[]@!$&'()*+,;="
+    integer                       :: k, q
+
+    ! prefix is HTML from the template; judge the URL the browser will see
+    pre = html_unescape(prefix)
+    pre = trim(adjustl(pre))
+    k = index(pre, '//')
+    q = scan(pre, '?#')
+
+    if (len(pre) == 0) then
+      if (has_unsafe_scheme(value)) then
+        encoded = '#'
+      else
+        encoded = percent_encode(value, RESERVED, .true.)
+      endif
+    elseif (k > 0 .and. q == 0 .and. len(pre) > k + 1 .and. &
+            scan(pre(k + 2:), '/') == 0) then
+      ! prefix ends inside the host ("https://example.com"): force a path
+      encoded = percent_encode(value, RESERVED, .true.)
+      if (index(encoded, '/') /= 1) encoded = '/' // encoded
+    elseif (q > 0) then
+      encoded = percent_encode(value, '', .false.)
+    else
+      encoded = percent_encode(value, RESERVED, .true.)
+      ! prefix and value together must not form a script scheme
+      if (scan(pre, ':/') == 0) then
+        joined = pre // value
+        if (has_unsafe_scheme(joined)) then
+          encoded = percent_encode(value, '', .false.)
+        endif
+      endif
+      ! "/" or "scheme:" followed by "/..." would start a new host
+      if ((pre == '/' .or. pre(len(pre):) == ':') .and. index(encoded, '/') == 1) then
+        encoded = '%2F' // encoded(2:)
+      endif
+    endif
+  endfunction
+
+  ! true when value starts with a scheme other than http, https or mailto;
+  ! browsers ignore whitespace and control characters inside the scheme
+  logical function has_unsafe_scheme(value)
+    character(len=*), intent(in)  :: value
+    character(len=:), allocatable :: stripped, scheme
+    integer                       :: i, colon
+
+    stripped = ''
+    do i = 1, len(value)
+      if (iachar(value(i:i)) > 32 .and. iachar(value(i:i)) /= 127) then
+        stripped = stripped // value(i:i)
+      endif
+    enddo
+
+    has_unsafe_scheme = .false.
+    colon = index(stripped, ':')
+    if (colon == 0) return
+    if (scan(stripped(1:colon - 1), '/?#') > 0) return
+    scheme = to_lower(stripped(1:colon - 1))
+    has_unsafe_scheme = .not. (scheme == 'http' .or. scheme == 'https' .or. &
+      scheme == 'mailto')
+  endfunction
 
   subroutine jadefile(templatefile, unitNo)
     character(len=10000)  :: templatefile
