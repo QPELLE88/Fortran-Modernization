@@ -4,3 +4,4 @@
 fortran_fcgi
 *.c
 *.a
+build/

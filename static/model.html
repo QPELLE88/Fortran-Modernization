@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>FORTRAN.io - Controller</title>
+    <title>FORTRAN.io - Model</title>
     <link rel="stylesheet" type="text/css" href="/static/bootstrap.min.css"/>
   </head>
   <body>
@@ -37,40 +37,40 @@
         </div>
       </div>
       <div class="row">
-        <p>The model uses FLIBS Fortran module and C files to talk to SQLite. You should create
-        the database, tables, and content ahead of time.</p>
-        <p>You should base your model on marsupial.f90 to make sure it includes the right features.
-        Here's how you can design a subroutine "getOneMarsupial"</p>
+        <p>The model talks to SQLite through <code>src/database.f90</code>, a thin ISO_C_BINDING wrapper over
+        <code>libsqlite3</code>. You should create the database, tables, and content ahead of time.</p>
+        <p>Base your model on <code>src/marsupial.f90</code>. Use prepared statements and bind user input as
+        a parameter, never concatenate it into SQL:</p>
 <pre>
-subroutine getOneMarsupial(query, name, latinName)
-  ! expect the query
-  character(len=*)		  :: query
-  ! define the column return values
-  character(len=50)			:: name, latinName
+subroutine find_marsupial(query, found, item, ok)
+  character(len=*), intent(in) :: query
+  logical, intent(out) :: found, ok
+  type(marsupial_t), intent(out) :: item
+  type(database_t) :: db
+  type(statement_t) :: stmt
+  integer :: rc
 
-  ! connect to your database
-  call sqlite3_open('marsupials.sqlite3', db)
+  found = .false.
+  call db%open('marsupials.sqlite3', ok, SQLITE_OPEN_READONLY)
+  if (.not. ok) return
 
-  ! prepares query
-  allocate( column(2) )
-  call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
-  call sqlite3_column_query( column(2), 'latinName', SQLITE_CHAR )
+  call db%prepare('SELECT name, latinName, wikiLink, description FROM marsupials ' // &amp;
+                  'WHERE INSTR(LOWER(name), LOWER(?1)) &gt; 0 LIMIT 1', stmt, rc)
+  if (rc == SQLITE_OK) rc = stmt%bind_text(1, trim(query))
+  if (rc == SQLITE_OK) then
+    if (stmt%step() == SQLITE_ROW) then
+      found = .true.
+      item%name = stmt%column_text(0)
+      item%latin_name = stmt%column_text(1)
+      item%wiki_link = stmt%column_text(2)
+      item%description = stmt%column_text(3)
+    end if
+  end if
+  ok = rc == SQLITE_OK
 
-  ! actual query - where clause to the end
-  call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE name = '" // trim(query) // "'")
-
-  i = 1
-  do
-    ! iterate to end of returned rows
-    call sqlite3_next_row(stmt, column, finished)
-    if (finished) exit
-
-    ! use column array to fill in name and latinName
-    call sqlite3_get_column(column(1), name)
-    call sqlite3_get_column(column(2), latinName)
-    i = i + 1
-  end do
-endsubroutine
+  call stmt%finalize()
+  call db%close()
+end subroutine find_marsupial
 </pre>
       </div>
     </div>

@@ -1,50 +1,64 @@
-# vim: noexpandtab: tabstop=4:
+# Fortran.io build
+#
+#   make            build ./fortran_fcgi
+#   make test       build and run the unit tests
+#   make smoke      run the end-to-end nginx + spawn-fcgi smoke test
+#   make clean
 
-FLIBS=flibs-0.9/flibs/src
-LIBSQLITE3=$(shell find /usr -name libsqlite3.a -print -quit)
-
-FORTRAN=gfortran
-FORTRANFLAGS=-ldl -lfcgi -pthread -Wl,-rpath -Wl,/usr/lib
-
-ifndef $(LIBSQLITE3)
-FORTRANFLAGS=-ldl -lfcgi -lsqlite3 -pthread -Wl,-rpath -Wl,/usr/lib
+ifeq ($(origin FC),default)
+FC = gfortran
 endif
 
-OBJECTS = \
-	marsupial.o \
-	jade.o \
-	string_helpers.o \
-	fsqlite.o \
-	cgi_protocol.o \
-	fcgi_protocol.o \
-	csqlite.o
+BUILD   := build
+FFLAGS  ?= -O2 -g
+FFLAGS  += -std=f2018 -Wall -Wextra -Wimplicit-interface -fimplicit-none -J$(BUILD)
+LDLIBS  := -lfcgi -lsqlite3
 
-fortran_fcgi: fortran_fcgi.f90 $(OBJECTS)
-	$(FORTRAN) -o $@ $^ $(LIBSQLITE3) $(FORTRANFLAGS) 
+# Library sources in dependency order.
+LIB_SRC := \
+	src/string_helpers.f90 \
+	src/http.f90 \
+	src/database.f90 \
+	src/fcgi.f90 \
+	src/jade.f90 \
+	src/marsupial.f90 \
+	src/app.f90
 
-marsupial.o: marsupial.f90 string_helpers.o fsqlite.o
-	$(FORTRAN) -c $<
+LIB_OBJ := $(patsubst src/%.f90,$(BUILD)/%.o,$(LIB_SRC))
 
-jade.o: jade.f90 string_helpers.o
-	$(FORTRAN) -c $<
+.PHONY: all test smoke clean
 
-string_helpers.o: string_helpers.f90
-	$(FORTRAN) -c $<
+all: fortran_fcgi
 
-fsqlite.o: $(FLIBS)/sqlite/fsqlite.f90
-	$(FORTRAN) -c $<
+fortran_fcgi: $(BUILD)/fortran_fcgi.o $(LIB_OBJ)
+	$(FC) $(FFLAGS) -o $@ $^ $(LDLIBS)
 
-cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90
-	$(FORTRAN) -c $<
+$(BUILD)/test_suite: $(BUILD)/test_suite.o $(LIB_OBJ)
+	$(FC) $(FFLAGS) -o $@ $^ $(LDLIBS)
 
-fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90
-	$(FORTRAN) -c $<
+test: $(BUILD)/test_suite
+	./$(BUILD)/test_suite
 
-csqlite.o: $(FLIBS)/sqlite/csqlite.c
-	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
-	cp $(FLIBS)/sqlite/csqlite.o . 
+smoke: fortran_fcgi
+	./test/smoke.sh
+
+$(BUILD):
+	mkdir -p $@
+
+$(BUILD)/%.o: src/%.f90 | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+
+$(BUILD)/fortran_fcgi.o: app/fortran_fcgi.f90 $(LIB_OBJ) | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+
+$(BUILD)/test_suite.o: test/test_suite.f90 $(LIB_OBJ) | $(BUILD)
+	$(FC) $(FFLAGS) -c $< -o $@
+
+# Module dependencies
+$(BUILD)/http.o: $(BUILD)/string_helpers.o
+$(BUILD)/jade.o: $(BUILD)/string_helpers.o
+$(BUILD)/marsupial.o: $(BUILD)/database.o
+$(BUILD)/app.o: $(BUILD)/http.o $(BUILD)/jade.o $(BUILD)/marsupial.o $(BUILD)/string_helpers.o
 
 clean:
-	rm -f -v fortran_fcgi *.o *.mod $(FLIBS)/sqlite/*.o
-
-.PHONY: clean
+	rm -rf $(BUILD) fortran_fcgi

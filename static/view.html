@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>FORTRAN.io - Controller</title>
+    <title>FORTRAN.io - View</title>
     <link rel="stylesheet" type="text/css" href="/static/bootstrap.min.css"/>
   </head>
   <body>
@@ -44,41 +44,35 @@ body
   h1 Hello World
   ul.className
     li#one Inside Text
-    li#two Inside Text 2
+    li#two(title="second", data-x='2') Inside Text 2
     li
-      a(href="http://example.com") Link
+      a.btn.btn-link(href="http://example.com") Link
+    | plain text line
 </pre>
-        <p>You can insert variable names into your template:</p>
+        <p>You can insert variables into your template. <code>#{key}</code> is HTML-escaped;
+        <code>!{key}</code> inserts trusted, pre-rendered HTML as-is:</p>
 <pre>
 h4
   span #{name}
   small #{occupation}
 </pre>
-
-        <p>Control functions (for / if - else - endif) and container divs should be printed directly in the controller.</p>
-        <p>This is also where you pass info to the template engine:</p>
+        <p>Loops and conditionals live in the controller, which renders a template per item.
+        Variables are passed as <code>key_value_t</code> pairs:</p>
 <pre>
-! open .container
-write(unitNo,AFORMAT) '&lt;div class="container"&gt;'
+type(key_value_t) :: vars(2)
+character(len=:), allocatable :: html
+logical :: ok
 
-! use a 2D array for key-value pairs -
-pagevars(1,1) = 'name'
-pagevars(1,2) = 'Nick'
-pagevars(2,1) = 'occupation'
-pagevars(2,2) = 'mapmaker'
+vars(1)%key = 'name'
+vars(1)%value = 'Nick'
+vars(2)%key = 'occupation'
+vars(2)%value = 'mapmaker'
 
-! use URL variable ?lang=__ to fill in this variable
-call cgi_get(dict, 'lang', language)
-
-if (language == 'english') then
-  templatefile = 'template/result-english.jade'
+if (get_param(req, 'lang') == 'english') then
+  call jade_render_file('template/result-english.jade', html, ok, vars=vars)
 else
-  templatefile = 'template/result-spanish.jade'
-endif
-call jadetemplate(templatefile, unitNo, pagevars)
-
-! close .container
-write(unitNo,AFORMAT) '&lt;/div&gt;'
+  call jade_render_file('template/result-spanish.jade', html, ok, vars=vars)
+end if
 </pre>
       </div>
     </div>

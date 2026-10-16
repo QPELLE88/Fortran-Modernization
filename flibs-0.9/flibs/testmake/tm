@@ -1,3 +1,0 @@
-#!/usr/bin/sh
-
-tclsh `dirname $0`/bin/testmake.tcl $@

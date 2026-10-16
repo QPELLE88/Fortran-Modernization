@@ -1,13 +1,13 @@
+# TODO
+
 models
-- search is more flexible (LOWER function)
+- full-text search (SQLite FTS5)
+- write endpoints (create/update marsupials)
 
 views
-- spacing, commas, multiple params
-- HTML escaping
+- loops/partials inside templates
 - cool images for marsupial search
-- spaces, commas, dots, hashes in attributes
 
-docs
-- testing?
-- refresher / update
-- figure out how to get the sqlite c file in place
+ops
+- run multiple FastCGI workers (spawn-fcgi -F) and benchmark
+- structured access logging
