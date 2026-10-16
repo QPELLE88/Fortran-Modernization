@@ -132,13 +132,12 @@ contains
         ! anything in CONTENT_LENGTH (request method was POST) ?
         ! The body length is client-controlled: it must be a plain non-negative integer
         ! no larger than MAX_CONTENT_LENGTH, or the body would not fit in 'content'
-        call get_environment_variable( "CONTENT_LENGTH", value=content, status=iStat )
+        call get_environment_variable( "CONTENT_LENGTH", value=content, length=iLen, status=iStat )
         if ( iStat == -1 ) then
             call fcgip_reject_request( unitNo, '413 Payload Too Large' )
-        else if ( iStat == 0 .and. len_trim(content) > 0 ) then
-            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//trim(content)
-            content = adjustl(content)
-            if ( verify(trim(content), '0123456789') /= 0 ) then
+        else if ( iStat == 0 .and. iLen > 0 ) then
+            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//content(:iLen)
+            if ( verify(content(:iLen), '0123456789') /= 0 ) then
                 call fcgip_reject_request( unitNo, '400 Bad Request' )
             else
                 read( content, *, iostat=iStat ) iLen
@@ -155,7 +154,9 @@ contains
                         nRead = i
                     end do
                     content( nRead+1: ) = ' '
-                    if ( nRead > 0 ) then
+                    if ( nRead < iLen ) then
+                        call fcgip_reject_request( unitNo, '400 Bad Request' )
+                    else if ( nRead > 0 ) then
                         call cgi_store_dict( dict, content(:nRead) )
                         write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:nRead)
                     end if
