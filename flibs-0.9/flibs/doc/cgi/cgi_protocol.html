@@ -186,11 +186,35 @@ by the contents of the variable msg.
 </dl>
 
 
+<dt><b class='cmd'>call cgi_session_directory( dir )</b><dd>
+
+Set the directory in which issued session IDs are recorded (one empty
+file per ID). It must exist and be writable only by the CGI application.
+Until it is set, <em>cgi_get_session</em> issues no session IDs.
+<br><br>
+<dl>
+<dt>character(len=*), intent(in) <i class='arg'>dir</i><dd>
+Name of the session directory
+</dl>
+
+
 <dt><a name="7"><b class='cmd'>call cgi_get_session( dict, value )</b> </a><dd>
 
-Get the value of the &quot;sessionid&quot; variable. This variable is
-already present in the form or it is set by this routine to a (more or
-less) unique value.
+Get the value of the &quot;sessionid&quot; variable. A value present in the form
+is only accepted if this server issued it: a 32-character lowercase hex
+string with a matching file in the session directory. Otherwise a new
+ID is issued: 128 random bits read from /dev/urandom, hex-encoded and
+recorded in the session directory.
+<br><br>
+If no session directory is set, /dev/urandom cannot be read, the ID
+cannot be recorded, or <em>value</em> is shorter than 32 characters,
+<em>value</em> is set to blanks.
+<br><br>
+Limits: this helper only issues and recognises IDs. It does not expire
+them, bind them to a user, or authenticate anyone, and an issued ID can
+be planted in a victim's form (session fixation). Do not rely on it for
+authentication on its own; call <em>cgi_new_session</em> after any change
+of privilege, such as a login.
 <br><br>
 To use it as a session identifier (if your application requires a
 continued conversation with the user), make sure each subsequent HTML
@@ -202,7 +226,20 @@ reply contains a line like:
 <br><br>
 <dl>
 <dt>character(len=*), intent(out) <i class='arg'>value</i><dd>
-The unique session ID
+The unique session ID (at least 32 characters)
+</dl>
+
+
+<dt><b class='cmd'>call cgi_new_session( dict, value )</b><dd>
+
+Always issue a new session ID (as described for <em>cgi_get_session</em>)
+and store it as &quot;sessionid&quot; in the dictionary.
+<br><br>
+<dl>
+<dt>type(DICT_STRUCT), pointer <i class='arg'>dict</i><dd>
+Dictionary with values
+<dt>character(len=*), intent(out) <i class='arg'>value</i><dd>
+The new session ID (at least 32 characters)
 </dl>
 
 
