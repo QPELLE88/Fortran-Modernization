@@ -17,7 +17,7 @@ module jade
   ! value containing #{...} is never expanded. Unknown keys are left as is.
   subroutine jadetemplate(templatefile, unitNo, replacements)
     character(len=10000)         :: templatefile
-    integer                      :: unitNo, i, n, p, start, keyEnd
+    integer                      :: unitNo, i, k, n, p, start, keyEnd
     character(len=*), dimension(10,2)    :: replacements
     character(len=3)   :: AFORMAT = '(a)'
     character(len=:), allocatable :: rendered, piece
@@ -34,6 +34,9 @@ module jade
       keyEnd = index(templatefile(start + 2:n), '}')
       if (keyEnd == 0) exit
       keyEnd = start + 1 + keyEnd
+      ! an unclosed "#{" before this one is literal text
+      k = index(templatefile(start + 2:keyEnd - 1), '#{', back=.true.)
+      if (k > 0) start = start + 1 + k
 
       piece = templatefile(p:start - 1)
       rendered = rendered // piece
@@ -240,28 +243,36 @@ module jade
   ! so the value cannot pick the scheme or (after a fixed host) the host
   function url_escape(prefix, value) result(encoded)
     character(len=*), intent(in)  :: prefix, value
-    character(len=:), allocatable :: encoded, pre
+    character(len=:), allocatable :: encoded, pre, joined
     character(len=*), parameter   :: RESERVED = ":/?#[]@!$&'()*+,;="
-    integer                       :: k
+    integer                       :: k, q
 
-    pre = trim(adjustl(prefix))
+    ! prefix is HTML from the template; judge the URL the browser will see
+    pre = html_unescape(prefix)
+    pre = trim(adjustl(pre))
+    k = index(pre, '//')
+    q = scan(pre, '?#')
+
     if (len(pre) == 0) then
       if (has_unsafe_scheme(value)) then
         encoded = '#'
       else
         encoded = percent_encode(value, RESERVED, .true.)
       endif
-    elseif (scan(pre, '?#') > 0) then
+    elseif (k > 0 .and. q == 0 .and. len(pre) > k + 1 .and. &
+            scan(pre(k + 2:), '/') == 0) then
+      ! prefix ends inside the host ("https://example.com"): force a path
+      encoded = percent_encode(value, RESERVED, .true.)
+      if (index(encoded, '/') /= 1) encoded = '/' // encoded
+    elseif (q > 0) then
       encoded = percent_encode(value, '', .false.)
     else
       encoded = percent_encode(value, RESERVED, .true.)
-      ! prefix ends inside the host ("https://example.com"): force a path
-      k = index(pre, '//')
-      if (k > 0) then
-        if (len(pre) > k + 1) then
-          if (scan(pre(k + 2:), '/') == 0 .and. index(encoded, '/') /= 1) then
-            encoded = '/' // encoded
-          endif
+      ! prefix and value together must not form a script scheme
+      if (scan(pre, ':/') == 0) then
+        joined = pre // value
+        if (has_unsafe_scheme(joined)) then
+          encoded = percent_encode(value, '', .false.)
         endif
       endif
       ! "/" or "scheme:" followed by "/..." would start a new host

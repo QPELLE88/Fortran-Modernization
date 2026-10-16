@@ -34,6 +34,17 @@ program test_jade
   call check('a(href="https://en.wikipedia.org/wiki/#{v}") x', 'Tasmanian_devil', &
     '<a href="https://en.wikipedia.org/wiki/Tasmanian_devil" id="" class="">x</a>')
   call check('script #{v}', 'alert(1)', '<script id="" class=""></script>')
+  call check('a(title=#{v}) x', 'Caf'//achar(195)//achar(169)//' x', &
+    '<a title=Caf'//achar(195)//achar(169)//'&#32;x id="" class="">x</a>')
+  call check('p a #{open #{v}', 'b', '<p id="" class="">a #{open b</p>')
+  call check('a(href="https://example&#46;com#{v}") x', '.evil.com', &
+    '<a href="https://example&#46;com/.evil.com" id="" class="">x</a>')
+  call check('a(href="https://example.com?x=#{v}") x', '@evil.com/a b', &
+    '<a href="https://example.com?x=%40evil.com%2Fa%20b" id="" class="">x</a>')
+  call check('a(href="java#{v}") x', 'script:alert(1)', &
+    '<a href="javascript%3Aalert%281%29" id="" class="">x</a>')
+  call check('a(href="#{w}#{v}") x', 'script:alert(1)', &
+    '<a href="&amp;script%3Aalert%281%29" id="" class="">x</a>')
   call check('p #{missing}', 'x', '<p id="" class="">#{missing}</p>')
 
   if (failures > 0) then
