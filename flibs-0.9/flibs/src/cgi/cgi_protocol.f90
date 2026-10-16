@@ -449,13 +449,19 @@ end subroutine cgi_error
 ! cgi_session_directory --
 !     Set the directory in which issued session IDs are recorded
 ! Arguments:
-!     dir           Directory name (must exist and be writable only by
-!                   the CGI application; an empty string disables sessions)
+!     dir           Directory name (must exist and be readable and writable
+!                   only by the CGI application, e.g. mode 0700: the issued
+!                   IDs are the file names). An empty string, or a name
+!                   longer than DICT_VALUE_LENGTH, disables sessions
 !
 subroutine cgi_session_directory( dir )
     character(len=*), intent(in) :: dir
 
-    session_dir = dir
+    if ( len_trim(dir) > len(session_dir) ) then
+        session_dir = ' '
+    else
+        session_dir = dir
+    endif
 
 end subroutine cgi_session_directory
 
@@ -550,9 +556,11 @@ subroutine cgi_new_session( dict, value )
     close( lu )
 
     value = id
+    data%value = id
     if ( associated(dict) ) then
-        data%value = id
         call dict_add_key( dict, "sessionid", data )
+    else
+        call dict_create( dict, "sessionid", data )
     endif
 
 end subroutine cgi_new_session
