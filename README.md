@@ -78,6 +78,7 @@ location / {
 	fastcgi_pass 127.0.0.1:9000;
 	fastcgi_index index.html;
 	include fastcgi_params;
+	client_max_body_size 1k;
 }
 ```
 
