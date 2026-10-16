@@ -92,6 +92,7 @@ int FTNCALL sqlite3_open_c_(
    if ( rc != 0 )
    {
       sqlite3_close(*db);
+      *db = NULL;
    }
    return rc ;
 }
@@ -103,6 +104,10 @@ int FTNCALL sqlite3_close_c_(
    int rc ;
 
    rc = sqlite3_close(*db);
+   if ( rc == SQLITE_OK )
+   {
+      *db = NULL;
+   }
    return rc ;
 }
 
@@ -138,6 +143,7 @@ void FTNCALL sqlite3_finalize_c_(
    int   rc  ;
 
    rc = sqlite3_finalize( *stmt ) ;
+   *stmt = NULL ;
 
    return ;
 }
@@ -191,6 +197,12 @@ int FTNCALL sqlite3_prepare_c_(
 {
    int   rc   ;
    char *pstr ;
+
+   if ( *db == NULL )
+   {
+      *stmt = NULL ;
+      return SQLITE_MISUSE ;
+   }
 
    rc = sqlite3_prepare( *db, command, (-1), stmt, &pstr ) ;
 
