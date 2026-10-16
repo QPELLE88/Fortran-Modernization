@@ -54,6 +54,7 @@ h4
   span #{name}
   small #{occupation}
 </pre>
+        <p>Values are escaped for where they appear (text, attribute, or URL), so data from users or the database cannot inject HTML or change a link's scheme or host. Values inside <code>script</code> or <code>style</code> are dropped.</p>
 
         <p>Control functions (for / if - else - endif) and container divs should be printed directly in the controller.</p>
         <p>This is also where you pass info to the template engine:</p>

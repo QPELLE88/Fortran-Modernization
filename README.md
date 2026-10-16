@@ -146,6 +146,13 @@ If you want to have a loop or other structure, it's better to create a partial a
     a(href="http://example.com/profile/#{id}") A link
 ```
 
+`#{key}` values are escaped for where they appear: HTML-escaped (`& < > " '`) in text and quoted attributes,
+entity-encoded in unquoted attributes, and percent-encoded in URL attributes (`href`, `src`, `action`, ...).
+A URL value at the start of an attribute may not use a scheme other than `http`, `https` or `mailto` (it becomes `#`),
+and a value after a fixed host such as `https://example.com#{path}` always starts a path. Values placed inside
+`script` or `style` elements are dropped. Placeholders are filled in one pass, so a value containing `#{...}` is never
+expanded. Run `make test` for the template tests.
+
 ## SQLite Database
 
 You can connect to a SQLite database. The example on <a href="https://fortran.io">Fortran.io</a>

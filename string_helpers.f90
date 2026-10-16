@@ -76,4 +76,94 @@ module string_helpers
         endif
       enddo
   end subroutine string_replace
+
+  function to_lower(str) result(lower)
+      character(len=*), intent(in) :: str
+      character(len=len(str))      :: lower
+
+      integer                      :: i
+
+      lower = str
+      do i = 1, len(str)
+        if (str(i:i) >= 'A' .and. str(i:i) <= 'Z') then
+          lower(i:i) = achar(iachar(str(i:i)) + 32)
+        endif
+      enddo
+  end function to_lower
+
+  ! escapes & < > " ' for HTML text and quoted attribute values
+  function html_escape(str) result(escaped)
+      character(len=*), intent(in)  :: str
+      character(len=:), allocatable :: escaped
+
+      integer                       :: i
+
+      escaped = ''
+      do i = 1, len(str)
+        select case (str(i:i))
+          case ('&')
+            escaped = escaped // '&amp;'
+          case ('<')
+            escaped = escaped // '&lt;'
+          case ('>')
+            escaped = escaped // '&gt;'
+          case ('"')
+            escaped = escaped // '&quot;'
+          case ("'")
+            escaped = escaped // '&#39;'
+          case default
+            escaped = escaped // str(i:i)
+        end select
+      enddo
+  end function html_escape
+
+  ! encodes every non-alphanumeric character as a numeric entity,
+  ! for values placed in unquoted attributes or inside a tag
+  function html_escape_strict(str) result(escaped)
+      character(len=*), intent(in)  :: str
+      character(len=:), allocatable :: escaped
+
+      character(len=3)              :: code
+      integer                       :: i
+
+      escaped = ''
+      do i = 1, len(str)
+        select case (str(i:i))
+          case ('A':'Z', 'a':'z', '0':'9')
+            escaped = escaped // str(i:i)
+          case default
+            write(code, '(I0)') iachar(str(i:i))
+            escaped = escaped // '&#' // trim(code) // ';'
+        end select
+      enddo
+  end function html_escape_strict
+
+  ! percent-encodes characters outside allowed; with keepEscapes,
+  ! well-formed %XX sequences are passed through unchanged
+  function percent_encode(str, allowed, keepEscapes) result(encoded)
+      character(len=*), intent(in)  :: str, allowed
+      logical, intent(in)           :: keepEscapes
+      character(len=:), allocatable :: encoded
+
+      character(len=*), parameter   :: UNRESERVED = &
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+      character(len=2)              :: hex
+      integer                       :: i
+
+      encoded = ''
+      do i = 1, len(str)
+        if (index(UNRESERVED, str(i:i)) > 0 .or. index(allowed, str(i:i)) > 0) then
+          encoded = encoded // str(i:i)
+          cycle
+        endif
+        if (keepEscapes .and. str(i:i) == '%' .and. i + 2 <= len(str)) then
+          if (verify(str(i+1:i+2), '0123456789ABCDEFabcdef') == 0) then
+            encoded = encoded // '%'
+            cycle
+          endif
+        endif
+        write(hex, '(Z2.2)') iachar(str(i:i))
+        encoded = encoded // '%' // hex
+      enddo
+  end function percent_encode
 endmodule
