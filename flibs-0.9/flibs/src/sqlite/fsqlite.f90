@@ -395,6 +395,9 @@ subroutine sqlite3_open( fname, db )
    call stringtoc( fnamec )
 
    db%error = sqlite3_open_c( fnamec, db%db_handle )
+   if ( db%error .ne. 0 ) then
+      db%db_handle = 0
+   endif
 end subroutine sqlite3_open
 
 
@@ -415,8 +418,15 @@ subroutine sqlite3_close( db )
       end function sqlite3_close_c
    end interface
 
+   if ( all( db%db_handle .eq. 0 ) ) then
+      db%error = 0
+      return
+   endif
+
    db%error = sqlite3_close_c( db%db_handle )
-   db%db_handle   = 0
+   if ( db%error .eq. 0 ) then
+      db%db_handle = 0
+   endif
 
 end subroutine sqlite3_close
 
@@ -812,6 +822,7 @@ subroutine sqlite3_finalize( stmt )
    type(SQLITE_STATEMENT)                      :: stmt
 
    call sqlite3_finalize_c( stmt%stmt_handle )
+   stmt%stmt_handle = 0
 
 end subroutine sqlite3_finalize
 
