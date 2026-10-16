@@ -12,8 +12,8 @@
 !         function fcgip_accept_environment_variables(), bound to libfcgi/FCGI_Accept()
 !            - waits for FCGI environment variables from the webserver
 !
-!         function fcgip_get_char(), bound to libfcgi/FCGI_get_char()
-!            - reads a character from POSTed data
+!         function fcgip_get_char(), bound to libfcgi/FCGI_getchar()
+!            - reads a character code from POSTed data (negative at EOF)
 !
 !         function fcgip_put_string(), bound to libfcgi/FCGI_puts()
 !            - copies a line of text to the webserver
@@ -23,6 +23,10 @@
 !
 !         subroutine fcgip_put_file ()
 !            - copies a file line by line to the webserver
+!
+!         function fcgip_request_rejected()
+!            - true if fcgip_make_dictionary() refused the request (e.g. POST body too large);
+!              fcgip_put_file() then sends the error status instead of the file
 !
 !     User must supply the routine to interpret the dictionary and compose a
 !         response to QUERY_STRING or POSTed data
@@ -44,11 +48,11 @@ module fcgi_protocol
             integer(C_INT) :: fcgip_accept_environment_variables
         end function fcgip_accept_environment_variables
 
-        ! The function to retrieve a character from POSTed data
+        ! The function to retrieve a character from POSTed data (returns EOF, i.e. < 0, at end of data)
         function fcgip_get_char () bind(C, NAME='FCGI_getchar')
             use ISO_C_BINDING
             implicit none
-            character(C_CHAR) :: fcgip_get_char
+            integer(C_INT) :: fcgip_get_char
         end function fcgip_get_char
 
         ! The function to copy a null-terminated string to the webserver
@@ -71,6 +75,8 @@ module fcgi_protocol
     integer, parameter, private                :: MAX_CONTENT_LENGTH = 1024
     character(len=MAX_CONTENT_LENGTH), private :: content
     integer, private                           :: iStat
+    ! HTTP status of a request refused by fcgip_make_dictionary(), blank if accepted
+    character(len=40), private                 :: rejectStatus = ' '
 
 contains
 
@@ -86,10 +92,12 @@ contains
 
         integer                           :: i
         integer                           :: iLen
-        character(len=1)                  :: ch
+        integer                           :: iChar
+        integer                           :: nRead
 
         ! write to the beginning of file unitNo
         rewind (unitNo)
+        rejectStatus = ' '
 
         ! Clean up dictionary ?
         if ( associated(dict) ) then
@@ -122,19 +130,36 @@ contains
         endif
 
         ! anything in CONTENT_LENGTH (request method was POST) ?
+        ! The body length is client-controlled: it must be a plain non-negative integer
+        ! no larger than MAX_CONTENT_LENGTH, or the body would not fit in 'content'
         call get_environment_variable( "CONTENT_LENGTH", value=content, status=iStat )
-        if ( iStat == 0 ) then
+        if ( iStat == -1 ) then
+            call fcgip_reject_request( unitNo, '413 Payload Too Large' )
+        else if ( iStat == 0 .and. len_trim(content) > 0 ) then
             write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//trim(content)
-            iLen = len_trim(content)
-            if ( iLen > 0 ) then
-                read( content, * ) iLen
-                do i=1,iLen
-                    ch = fcgip_get_char()
-                    content( i:i ) = ch
-                end do
-                content( iLen+1: ) = ' '
-                call cgi_store_dict( dict, content(:iLen) )
-                write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
+            content = adjustl(content)
+            if ( verify(trim(content), '0123456789') /= 0 ) then
+                call fcgip_reject_request( unitNo, '400 Bad Request' )
+            else
+                read( content, *, iostat=iStat ) iLen
+                if ( iStat /= 0 ) then ! only digits, so the value overflowed
+                    call fcgip_reject_request( unitNo, '413 Payload Too Large' )
+                else if ( iLen > MAX_CONTENT_LENGTH ) then
+                    call fcgip_reject_request( unitNo, '413 Payload Too Large' )
+                else
+                    nRead = 0
+                    do i=1,iLen
+                        iChar = fcgip_get_char()
+                        if ( iChar < 0 ) exit ! EOF before CONTENT_LENGTH bytes
+                        content( i:i ) = achar(iChar)
+                        nRead = i
+                    end do
+                    content( nRead+1: ) = ' '
+                    if ( nRead > 0 ) then
+                        call cgi_store_dict( dict, content(:nRead) )
+                        write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:nRead)
+                    end if
+                end if
             end if
         endif
 
@@ -143,6 +168,23 @@ contains
         write(unitNo, AFORMAT) '%REMARK% completed dictionary...'
 
     end subroutine fcgip_make_dictionary
+
+
+    subroutine fcgip_reject_request( unitNo, status )
+        ! Mark the current request as refused with HTTP status 'status'
+        integer, intent(in)               :: unitNo
+        character(len=*), intent(in)      :: status
+
+        rejectStatus = status
+        write(unitNo, AFORMAT) '%REMARK% rejected request: '//trim(status)
+
+    end subroutine fcgip_reject_request
+
+
+    logical function fcgip_request_rejected()
+        ! True if fcgip_make_dictionary() refused the current request
+        fcgip_request_rejected = rejectStatus /= ' '
+    end function fcgip_request_rejected
 
 
 
@@ -163,6 +205,14 @@ contains
 
         ! flush any pending writes
         flush(unitNo)
+
+        ! refused request: send only the error status
+        if ( rejectStatus /= ' ' ) then
+            iStat = fcgip_put_string ('Status: '//trim(rejectStatus)//CRLF// &
+                'Content-type: text/plain'//CRLF//NUL)
+            iStat = fcgip_put_string (trim(rejectStatus)//NUL)
+            return
+        endif
 
         ! let the server know what type of data
         iStat = fcgip_put_string ('Content-type: '//trim(mimetype_)//CRLF//NUL)
