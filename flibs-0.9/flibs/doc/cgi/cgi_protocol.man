@@ -134,7 +134,10 @@ by the contents of the variable msg.
 
 [call [cmd "call cgi_session_directory( dir )"]]
 Set the directory in which issued session IDs are recorded (one empty
-file per ID). It must exist and be writable only by the CGI application.
+file per ID, named after the ID). It must exist and be readable and
+writable only by the CGI application (e.g. mode 0700), since anyone who
+can list it can read every issued ID. A name longer than 200 characters
+disables sessions.
 Until it is set, [term cgi_get_session] issues no session IDs.
 [list_begin arg]
 [arg_def "character(len=*), intent(in)" dir]
