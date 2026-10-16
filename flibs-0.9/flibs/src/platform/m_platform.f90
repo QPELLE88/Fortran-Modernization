@@ -68,6 +68,8 @@
 !     platform_cd                           Change the system current directory
 !     platform_stat                         Get status of a file
 !     platform_rename                       Rename a file or directory
+!     platform_copy_file                    Copy a file
+!     platform_isdirectory                  Test if a path is a directory
 !     platform_remove_file                  Remove a file
 !     platform_mkdir                        Create a directory
 !     platform_rmdir                        Remove an empty directory
@@ -275,6 +277,8 @@ module m_platform
   public :: platform_osstring
   public :: platform_platformstring
   public :: platform_rename
+  public :: platform_copy_file
+  public :: platform_isdirectory
   public :: platform_remove_file
   public :: platform_mkdir
   public :: platform_rmdir
@@ -368,6 +372,16 @@ module m_platform
        character(kind=c_char), dimension(*), intent(in) :: path
        integer(c_int) :: c_remove_tree
      end function c_remove_tree
+     function c_is_directory ( path ) bind ( C , name = "flibs_platform_is_directory" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: c_is_directory
+     end function c_is_directory
+     function c_copy_file ( src , dst ) bind ( C , name = "flibs_platform_copy_file" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: src, dst
+       integer(c_int) :: c_copy_file
+     end function c_copy_file
   end interface
 
 contains
@@ -611,6 +625,25 @@ contains
     integer, intent(out) :: status
     status = c_rename ( platform_cstring ( oldpath ) , platform_cstring ( newpath ) )
   end subroutine platform_rename
+  !
+  ! platform_copy_file --
+  !   Copy the regular file src into the file dst, as cp(1) does
+  !   (permission bits of src for a new dst). Copying a file onto itself fails.
+  !
+  subroutine platform_copy_file ( src , dst , status )
+    character(len=*), intent(in) :: src
+    character(len=*), intent(in) :: dst
+    integer, intent(out) :: status
+    status = c_copy_file ( platform_cstring ( src ) , platform_cstring ( dst ) )
+  end subroutine platform_copy_file
+  !
+  ! platform_isdirectory --
+  !   Returns .true. if path is a directory (symbolic links are followed).
+  !
+  logical function platform_isdirectory ( path )
+    character(len=*), intent(in) :: path
+    platform_isdirectory = c_is_directory ( platform_cstring ( path ) ) /= 0
+  end function platform_isdirectory
   !
   ! platform_remove_file --
   !   Remove the file (or symbolic link) path with unlink(2).

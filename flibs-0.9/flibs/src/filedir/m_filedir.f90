@@ -208,6 +208,8 @@ module m_filedir
        platform_cd, &
        platform_stat, &
        platform_rename, &
+       platform_copy_file, &
+       platform_isdirectory, &
        platform_mkdir, &
        platform_rmdir, &
        platform_remove_tree, &
@@ -510,9 +512,9 @@ contains
   end subroutine filedir_rename
   !
   ! filedir_copy --
-  !   Make a binary copy of the file sourcefn into targetfn, using
-  !   standard fortran stream I/O (no shell command is run).
+  !   Copy the file sourcefn into targetfn (no shell command is run).
   !   If targetfn is a directory, the file is copied into it.
+  !   Copying a file onto itself fails and leaves it unchanged.
   ! Arguments:
   !   sourcefn : the source file name
   !   targetfn : the target file name
@@ -525,11 +527,7 @@ contains
     integer :: local_status
     character ( len = len(sourcefn)+len(targetfn)+22) :: message
     logical :: fexist
-    integer, parameter :: chunk_size = 65536
-    character ( len = chunk_size ) :: buffer
     character ( len = len(sourcefn)+len(targetfn)+1 ) :: targetpath
-    integer :: source_unit, target_unit
-    integer :: file_size, position, nbytes
     !
     ! Check source file.
     !
@@ -551,28 +549,7 @@ contains
     else
        targetpath = targetfn
     endif
-    source_unit = filedir_get_unit ( )
-    open ( UNIT = source_unit , FILE = sourcefn , ACCESS = 'STREAM' , FORM = 'UNFORMATTED' , &
-         ACTION = 'READ' , STATUS = 'OLD' , IOSTAT = local_status )
-    if ( local_status == 0 ) then
-       inquire ( UNIT = source_unit , SIZE = file_size )
-       target_unit = filedir_get_unit ( )
-       open ( UNIT = target_unit , FILE = targetpath , ACCESS = 'STREAM' , FORM = 'UNFORMATTED' , &
-            ACTION = 'WRITE' , STATUS = 'REPLACE' , IOSTAT = local_status )
-       if ( local_status == 0 ) then
-          position = 0
-          do while ( position < file_size .and. local_status == 0 )
-             nbytes = min ( chunk_size , file_size - position )
-             read ( source_unit , IOSTAT = local_status ) buffer ( 1 : nbytes )
-             if ( local_status == 0 ) then
-                write ( target_unit , IOSTAT = local_status ) buffer ( 1 : nbytes )
-             endif
-             position = position + nbytes
-          enddo
-          close ( target_unit )
-       endif
-       close ( source_unit )
-    endif
+    call platform_copy_file ( sourcefn , targetpath , local_status )
     if ( present ( status ) ) then
        status = local_status
     elseif ( local_status /=0 ) then
@@ -1306,17 +1283,7 @@ contains
   !
   logical function filedir_isdirectory ( dirname )
     character(len=*), intent(in) :: dirname
-    ! TODO : What if the current working directory is longer that the given directory name ?
-    character ( len=len(dirname)) :: cwd
-    integer :: status
-    call filedir_pwd ( cwd )
-    call platform_cd ( dirname , status )
-    if ( status == 0 ) then
-       filedir_isdirectory = .true.
-    else
-       filedir_isdirectory = .false.
-    endif
-    call platform_cd ( cwd )
+    filedir_isdirectory = platform_isdirectory ( dirname )
   end function filedir_isdirectory
   !
   ! filedir_pathtype --

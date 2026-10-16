@@ -696,6 +696,7 @@ contains
     integer, parameter :: filelength = 400
     integer :: numberOfFiles
     integer :: status
+    integer :: file_size
     logical :: force
     call logmsg ( "Test #34 : shell metacharacters in file names" )
     call filedir_tempfile ( tempfile )
@@ -753,6 +754,19 @@ contains
     call assert ( filedir_exists ( outside ) , "Error in shell safety : delete followed a symlink")
     call assert ( .not. filedir_exists ( canary ) , "Error in shell safety : mkdir/delete ran a command")
     call filedir_delete ( outside )
+    !
+    ! copy : onto itself (refused, content kept) and into a directory
+    !
+    call filedir_copy ( "declaration.txt" , "declaration.txt" , status )
+    call assert ( status /= 0 , "Error in copy : self copy accepted")
+    inquire ( file = "declaration.txt" , size = file_size )
+    call assert ( file_size > 0 , "Error in copy : self copy truncated the source")
+    call filedir_mkdir ( "fsd" , status )
+    call filedir_copy ( "declaration.txt" , "fsd" , status )
+    call assert ( status == 0 , "Error in copy : into a directory (1)")
+    call assert ( filedir_exists ( filedir_join ( "fsd" , "declaration.txt" ) ) , "Error in copy : into a directory (2)")
+    call assert ( filedir_exists ( "declaration.txt" ) , "Error in copy : the working directory changed")
+    call filedir_delete ( "fsd" , force , status )
     call filedir_delete ( workdir , force , status )
     call assert ( status == 0 .and. .not. filedir_isdirectory ( workdir ) , "Error in shell safety : cleanup")
   end subroutine test_m_filedir_shellsafety
