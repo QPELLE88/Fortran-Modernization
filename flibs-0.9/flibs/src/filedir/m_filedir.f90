@@ -200,14 +200,26 @@ module m_filedir
 #endif
   use m_platform, only : &
        platform_get_platform, &
-       platform_system, &
        PLATFORM_PLATFORM_WINDOWS, &
        PLATFORM_PLATFORM_UNIX, &
        PLATFORM_PLATFORM_MAC, &
        PLATFORM_PLATFORM_NB, &
        platform_get_environment_variable , &
        platform_cd, &
-       platform_stat
+       platform_stat, &
+       platform_rename, &
+       platform_copy_file, &
+       platform_isdirectory, &
+       platform_mkdir, &
+       platform_rmdir, &
+       platform_remove_tree, &
+       platform_touch, &
+       platform_mkstemp, &
+       platform_dir_open, &
+       platform_dir_next, &
+       platform_dir_close, &
+       platform_fnmatch
+  use, intrinsic :: iso_c_binding, only : c_ptr
   implicit none
   private
   public :: filedir_add_extension
@@ -255,17 +267,6 @@ module m_filedir
   integer, parameter, public :: MAX_COMMAND_LENGTH = 1000
   character (len=1), parameter :: PLATFORM_SEPARATOR_UNKNOWN = "?"
   character (len=1), save :: PLATFORM_SEPARATOR = PLATFORM_SEPARATOR_UNKNOWN
-  !
-  ! Static, Platform-specific commands
-  !
-  character(len=20), save :: command_ls
-  character(len=20), save :: command_copy
-  character(len=20), save :: command_mkdir
-  character(len=20), save :: command_redirect
-  character(len=20), save :: command_suppress_msg
-  character(len=20), save :: command_touch
-  character(len=20), save :: command_rmdir
-  character(len=20), save :: command_rmdir_force
   ! Set to .true. if the static attributes have allready been initialized
   logical :: filedir_static_initialized = .false.
   !
@@ -317,34 +318,6 @@ contains
           PLATFORM_SEPARATOR = ":"
        case default
           write(message,*) "Unknown separator for platform :", platform
-          call filedir_error ( "filedir_init" , message )
-       end select
-       !
-       ! 2. Initialize the platform-specific commands
-       !
-       select case ( platform )
-       case ( PLATFORM_PLATFORM_WINDOWS )
-          ! See http://en.wikipedia.org/wiki/List_of_DOS_commands
-          command_ls = "dir /b"
-          command_copy = "copy"
-          command_mkdir = "mkdir"
-          command_redirect = ">"
-          command_suppress_msg = "2>nul"
-          command_touch = ""
-          command_rmdir = "rd"
-          command_rmdir_force = "rmdir /s /q"
-       case ( PLATFORM_PLATFORM_UNIX )
-          ! See http://en.wikipedia.org/wiki/List_of_Unix_programs
-          command_ls = "ls"
-          command_copy = "cp"
-          command_mkdir = "md"
-          command_redirect = ">"
-          command_suppress_msg = "2>/dev/null"
-          command_touch = "touch"
-          command_rmdir = "rm"
-          command_rmdir_force = "rm -r -f"
-       case default
-          write(message,*) "Unknown commands for platform :", platform
           call filedir_error ( "filedir_init" , message )
        end select
        !
@@ -500,7 +473,7 @@ contains
   end function filedir_add_extension
   !
   ! filedir_rename --
-  !   Renames the file ofdln to newfn by using the RENAME fortran extension.
+  !   Renames the file oldfn to newfn with rename(2).
   ! Arguments:
   !   oldfn : the old file name
   !   newfn : the new file name
@@ -527,53 +500,34 @@ contains
        return
     endif
     !
-    ! Rename the file
+    ! Rename the file with rename(2)
     !
-#ifdef _FS_RENAME_FUNCTION
-    local_status = RENAME ( oldfn , newfn )
-#endif
-#ifdef _FS_RENAME_SUBROUTINE
-    call RENAME ( oldfn , newfn , local_status )
-#endif
-    !
-    ! Case when no macro is defined
-    !
-#ifndef _FS_RENAME_FUNCTION
-#ifndef _FS_RENAME_SUBROUTINE
-    if ( present ( status ) ) then
-       status = FS_ERROR_UNDEFINED_SERVICE
-    else
-       write(message,*) "The rename service is not provided."
-       call filedir_error ( "filedir_rename" , message )
-    endif
-#endif
-#endif
+    call platform_rename ( oldfn , newfn , local_status )
     if ( present ( status ) ) then
        status = local_status
-       ! TODO : check if the following line should be instead "elseif ( local_status /=0 ) then"
-    else
+    elseif ( local_status /= 0 ) then
        write ( message , * ) "Unable to rename file ", trim( oldfn ), " to file ", trim( newfn )
        call filedir_error ( "filedir_rename" , message )
     endif
   end subroutine filedir_rename
   !
   ! filedir_copy --
-  !   Copy the file ofdln to newfn by using the SYSTEM fortran extension.
+  !   Copy the file sourcefn into targetfn (no shell command is run).
+  !   If targetfn is a directory, the file is copied into it.
+  !   Copying a file onto itself fails and leaves it unchanged.
   ! Arguments:
   !   sourcefn : the source file name
   !   targetfn : the target file name
   !   status, optional : if supplied, it contains 0 on success or nonzero error code
   !      upon return
-  ! Note :
-  !    This subroutine is system-dependent.
   !
   subroutine filedir_copy ( sourcefn , targetfn , status )
     character(len=*), intent(in) :: sourcefn, targetfn
     integer, intent(out) , optional :: status
     integer :: local_status
-    character (len=len(sourcefn)+len(targetfn)+len(command_copy) + 2) :: command
     character ( len = len(sourcefn)+len(targetfn)+22) :: message
     logical :: fexist
+    character ( len = len(sourcefn)+len(targetfn)+1 ) :: targetpath
     !
     ! Check source file.
     !
@@ -590,8 +544,12 @@ contains
     !
     ! Make the copy
     !
-    write ( command , *) trim(command_copy) , " ",  trim(sourcefn), " ", trim(targetfn)
-    call platform_system ( command , local_status )
+    if ( filedir_isdirectory ( targetfn ) ) then
+       targetpath = filedir_join ( targetfn , filedir_tail ( sourcefn ) )
+    else
+       targetpath = targetfn
+    endif
+    call platform_copy_file ( sourcefn , targetpath , local_status )
     if ( present ( status ) ) then
        status = local_status
     elseif ( local_status /=0 ) then
@@ -763,8 +721,6 @@ contains
     integer :: file_unit
     character(len=len(filename)+23) :: message
     logical :: isdir
-    ! TODO : this length is ugly, introduce real dynamic strings in fortran 90 OO
-    character ( len = len(filename)+len(command_rmdir)+len(command_rmdir_force)+ 1) :: command
     isdir = filedir_isdirectory ( filename )
     if (.NOT.isdir) then
        ! Delete that regular file
@@ -782,11 +738,10 @@ contains
        ! Delete that directory
        !
        if (force) then
-          write ( command , * ) trim(command_rmdir_force) , " ", trim(filename)
+          call platform_remove_tree ( filename , local_status )
        else
-          write ( command , * ) trim(command_rmdir) , " ", trim(filename)
+          call platform_rmdir ( filename , local_status )
        endif
-       call platform_system ( command , local_status )
        isdir = filedir_isdirectory ( filename )
        if (isdir) then
           local_status = -1
@@ -916,95 +871,94 @@ contains
     integer, intent(out)                    :: numberOfFiles
     ! listOfFiles ( : , ifile) is the file #ifile
     ! listOfFiles ( ichar , ifile ) is the character #ichar for file #ifile
-    character, dimension(:,:), pointer :: listOfFiles ! -> does not work
-    !!$    !character(len=*), dimension(:), pointer :: listOfFiles ! -> does not work
-    !!$    ! NOTE :
-    !!$    ! When I test it against Intel Fortran 8 or gfortran 4.0.2, the
-    !!$    ! program freezes. I have to change the declaration of the list of files to :
-    !!$    !character(len=50), dimension(1:50) :: listOfFiles -> works fine.
-    !!$    !character(len=*), dimension(1:50) :: listOfFiles -> does not work
-    !!$
-    character(len=200)                      :: tmpfile
-    character(len=200)                      :: cmd
-    character(len=1)                        :: line_unused
-    integer                                 :: luntmp
-    integer                                 :: i
-    integer                                 :: ierr
-    integer :: platform
-    character (len=200) :: tempdir
-    character(len=200)             :: prefix
+    character, dimension(:,:), pointer :: listOfFiles
+    !
+    ! The directory part of the pattern is used as is, the wildcards
+    ! in the last component are matched against the entries of that
+    ! directory with fnmatch(3). No shell and no temporary file are used.
+    !
+    character(len=len(pattern)) :: directory
+    character(len=len(pattern)) :: namepattern
+    character(len=:), allocatable :: entryname
+    character(len=filelength), dimension(:), allocatable :: names
+    character(len=filelength), dimension(:), allocatable :: grown
+    character(len=filelength) :: current_filename
+    type(c_ptr) :: dirhandle
+    integer :: isep
+    integer :: ierr
     integer :: ifile
-    character (len=filelength) :: current_filename
-    character (len=filelength) :: full_filename
+    integer :: jfile
     integer :: icharacter
-    ! NOTE :
-    ! I would like to use this declaration instead, but this does not work ????
-    !character(len=len(pattern))             :: prefix
+    logical :: found
+    logical :: with_prefix
     !
-    ! 1. Compute the list of files and redirect it to a temporary file.
+    ! 1. Split the pattern into a directory and a file name pattern
     !
-    call filedir_tempdir ( tempdir )
-    ! TODO  : create a subroutine which returns the path to a temporary file.
-    tmpfile = filedir_join ( tempdir , "__filelist__" )
-    !
-    ! Compute the platform-specific ls command
-    !
-    ! Only file names!
-    ! Get the current platform
-    platform = platform_get_platform ()
-    cmd = trim(command_ls) // ' ' // trim(pattern) // ' ' // trim(command_redirect) // trim(tmpfile) &
-         // ' ' // command_suppress_msg
-    ! TODO : understand when the command has to be fixed up with "file_correct_separator"
-    !cmd = filedir_normalize ( cmd )
-    !
-    ! Under windows, we only get the file tails.
-    ! So we have to normalize these files tails to get the full file names.
-    !
-    if (platform == PLATFORM_PLATFORM_WINDOWS) then
-       prefix = pattern
-       prefix = filedir_normalize ( prefix )
-       i = filedir_last_separator_index ( prefix )
-       prefix(i:) = ' '
+    isep = filedir_last_separator_index ( pattern )
+    if ( isep == 0 ) then
+       directory = "."
+       namepattern = pattern
+       with_prefix = .false.
+    else
+       if ( isep == 1 ) then
+          directory = pattern ( 1 : 1 )
+       else
+          directory = pattern ( 1 : isep - 1 )
+       endif
+       namepattern = pattern ( isep + 1 : )
+       with_prefix = .true.
     endif
-    call platform_system ( cmd )
     !
-    ! 2. Analyse the content of the temporary file.
-    !
-    luntmp = filedir_get_unit ( )
-    open( luntmp , file = tmpfile )
-    !
-    ! 2.1 Count the number of files, the maximum length of all files
+    ! 2. List the matching entries of the directory
     !
     numberOfFiles = 0
-    do
-       read( luntmp, '(a)', iostat = ierr ) line_unused
-       if ( ierr == 0 ) then
+    allocate ( names ( 1 : 16 ) )
+    call platform_dir_open ( directory , dirhandle , ierr )
+    if ( ierr == 0 ) then
+       do
+          call platform_dir_next ( dirhandle , entryname , found )
+          if ( .not. found ) exit
+          if ( entryname == "." .or. entryname == ".." ) cycle
+          if ( .not. platform_fnmatch ( namepattern , entryname ) ) cycle
+          if ( numberOfFiles == size ( names ) ) then
+             allocate ( grown ( 1 : 2 * size ( names ) ) )
+             grown ( 1 : numberOfFiles ) = names ( 1 : numberOfFiles )
+             call move_alloc ( grown , names )
+          endif
           numberOfFiles = numberOfFiles + 1
-       else
-          exit
-       endif
-    enddo
-    rewind( luntmp )
+          if ( with_prefix ) then
+             names ( numberOfFiles ) = pattern ( 1 : isep ) // entryname
+          else
+             names ( numberOfFiles ) = entryname
+          endif
+       enddo
+       call platform_dir_close ( dirhandle )
+    endif
     !
-    ! 2.2 Fill the array
+    ! 3. Sort the names, as ls does
+    !
+    do ifile = 2 , numberOfFiles
+       current_filename = names ( ifile )
+       jfile = ifile - 1
+       do while ( jfile >= 1 )
+          if ( llt ( current_filename , names ( jfile ) ) ) then
+             names ( jfile + 1 ) = names ( jfile )
+             jfile = jfile - 1
+          else
+             exit
+          endif
+       enddo
+       names ( jfile + 1 ) = current_filename
+    enddo
+    !
+    ! 4. Fill the array
     !
     allocate( listOfFiles(1:filelength , 1:numberOfFiles ) )
     do ifile = 1 , numberOfFiles
-       !read( luntmp, '(a)' ) listOfFiles(ifile,:)
-       read( luntmp, '(a)' ) current_filename
-       if (platform == PLATFORM_PLATFORM_WINDOWS) then
-          full_filename = filedir_join ( prefix , current_filename )
-       else
-          full_filename = current_filename
-       endif
        do icharacter = 1 , filelength
-          listOfFiles ( icharacter , ifile ) = full_filename ( icharacter : icharacter )
+          listOfFiles ( icharacter , ifile ) = names ( ifile ) ( icharacter : icharacter )
        enddo
     enddo
-    !
-    ! 3. Delete the temporary file
-    !
-    close( luntmp, status = 'delete' )
   end subroutine filedir_findByPattern
   !
   ! filedir_tempdir --
@@ -1238,59 +1192,20 @@ contains
   !
   subroutine filedir_tempfile ( tempfile )
     character(len=*), intent(out)             :: tempfile
-    ! TODO : what if the temp file has less characters than the temp dir ?
     character(len=len(tempfile))             :: tempdir
-    ! Number of characters for the random file tail
-    integer , parameter ::  nrand_chars = 10
-    character(len=nrand_chars)             :: randomFileTail
-    ! The characters from which the name of the file is made of
-    integer , parameter :: setsize = 36
-    character, dimension(1:setsize), parameter :: characterSet = (/"a", "b", "c", "d", "e", "f", "g", "h", "i", &
-     "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", &
-     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"/)
-    integer :: icharacter
-    ! Maximum number of tries
-    integer , parameter :: maxtries = 10
-    integer :: itry
-    integer :: random_integer
-    real :: alea
-    logical :: fexist
-    logical :: tempfile_done
-    character (len=200) :: message
+    integer :: local_status
+    character (len=len(tempfile)+60) :: message
     call filedir_tempdir ( tempdir )
     !
-    ! 1. Loop over the tries
+    ! The file is created atomically with a unique name (mkstemp(3) uses
+    ! O_CREAT|O_EXCL and mode 0600), so that it cannot be pre-created
+    ! or replaced by a symbolic link between the choice of the name and
+    ! its creation.
     !
-    tempfile_done = .false.
-    call random_seed()
-    do itry = 1, maxtries
-       !
-       ! 1.1 Computes a random file tail
-       !
-       do icharacter = 1, nrand_chars
-          call random_number ( alea )
-          random_integer = nint( alea * setsize + 1 - alea )
-          randomFileTail(icharacter:icharacter) = characterSet ( random_integer )
-       end do
-       !
-       ! 1.2 Computes a full file
-       !
-       tempfile = filedir_join ( tempdir , randomFileTail )
-       !
-       ! 1.3 See if the file allready exists
-       !
-       fexist = filedir_exists ( tempfile )
-       if ( .NOT.fexist ) then
-          ! If the file does not exist, we have found our temporary file name
-          tempfile_done = .true.
-          exit
-       endif
-    end do
-    if (.NOT.tempfile_done) then
-       write(message,*) "Unable to create a temporary file in directory :", tempdir
-       call filedir_error ( "filedir_tempfile_name" , message )
-    else
-       call filedir_touch ( tempfile )
+    call platform_mkstemp ( filedir_join ( tempdir , "flibs_" ) , tempfile , local_status )
+    if ( local_status /= 0 ) then
+       write(message,*) "Unable to create a temporary file in directory :", trim(tempdir)
+       call filedir_error ( "filedir_tempfile" , message )
     endif
   end subroutine filedir_tempfile
   !
@@ -1306,15 +1221,13 @@ contains
     integer, intent(out) , optional :: status
     integer :: local_status
     integer :: platform
-    character (len= len(filename) + len(command_touch) + 1) :: command
     character (len=200) :: message
     platform = platform_get_platform ()
     select case ( platform )
     case ( PLATFORM_PLATFORM_WINDOWS )
        call filedir_touch_windows ( filename , local_status )
     case ( PLATFORM_PLATFORM_UNIX )
-       write ( command , *) trim(command_touch), " ", trim(filename)
-       call platform_system ( command , local_status )
+       call platform_touch ( filename , local_status )
     case default
        write(message,*) "Unknown touch command for platform :", platform
        call filedir_error ( "filedir_touch" , message )
@@ -1370,17 +1283,7 @@ contains
   !
   logical function filedir_isdirectory ( dirname )
     character(len=*), intent(in) :: dirname
-    ! TODO : What if the current working directory is longer that the given directory name ?
-    character ( len=len(dirname)) :: cwd
-    integer :: status
-    call filedir_pwd ( cwd )
-    call platform_cd ( dirname , status )
-    if ( status == 0 ) then
-       filedir_isdirectory = .true.
-    else
-       filedir_isdirectory = .false.
-    endif
-    call platform_cd ( cwd )
+    filedir_isdirectory = platform_isdirectory ( dirname )
   end function filedir_isdirectory
   !
   ! filedir_pathtype --
@@ -1441,15 +1344,13 @@ contains
     character(len=*), intent(in) :: dirname
     integer, intent(out) , optional :: status
     integer :: local_status
-    character (len=len(dirname)+len(command_mkdir) + 2) :: command
     character(len=len(dirname)+26) :: message
     logical :: isdir
     isdir = filedir_isdirectory ( dirname )
     if (isdir) then
        local_status = -1
     else
-       write ( command , *) trim(command_mkdir) , " ",  trim(dirname)
-       call platform_system ( command , local_status )
+       call platform_mkdir ( dirname , local_status )
     endif
     if ( present ( status ) ) then
        status = local_status
