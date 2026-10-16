@@ -664,6 +664,11 @@ contains
     !
     call check_fileunitsnb ()
     !
+    ! Test #34 : file names containing shell metacharacters are never run as commands
+    !
+    call test_m_filedir_shellsafety ()
+    call check_fileunitsnb ()
+    !
     ! Shutdown the tests
     !
     call logmsg ( "Test suite completed" )
@@ -671,6 +676,86 @@ contains
     call log_shutdown ()
     
   end subroutine test_m_filedir_all
+  !
+  ! test_m_filedir_shellsafety --
+  !   Check that file names and patterns are passed to the system as
+  !   data : a name embedding a shell command must not run that command.
+  !
+  subroutine test_m_filedir_shellsafety ()
+    character(len=400) :: workdir
+    character(len=400) :: canary
+    character(len=400) :: outside
+    character(len=400) :: injected
+    character(len=400) :: copied
+    character(len=400) :: renamed
+    character(len=400) :: subdir
+    character(len=400) :: pattern
+    character(len=400) :: tempfile
+    character(len=400) :: computed
+    character, dimension(:,:), pointer :: listOfFiles
+    integer, parameter :: filelength = 400
+    integer :: numberOfFiles
+    integer :: status
+    logical :: force
+    call logmsg ( "Test #34 : shell metacharacters in file names" )
+    call filedir_tempfile ( tempfile )
+    call filedir_delete ( tempfile )
+    workdir = trim(tempfile) // "_dir"
+    call filedir_mkdir ( workdir , status )
+    call assert ( status == 0 , "Error in shell safety : mkdir work directory")
+    ! A shell would run the injected commands in the current directory
+    canary = "flibs_shell_canary"
+    if ( filedir_exists ( canary ) ) call filedir_delete ( canary )
+    injected = filedir_join ( workdir , "a b;touch " // trim(canary) // ";$(touch " // trim(canary) // ")`x`.txt" )
+    copied = filedir_join ( workdir , "c|touch " // trim(canary) // " &.txt" )
+    renamed = filedir_join ( workdir , "d'touch " // trim(canary) // "'>x.txt" )
+    subdir = filedir_join ( workdir , "e;touch " // trim(canary) )
+    !
+    ! touch, copy, rename
+    !
+    call filedir_touch ( injected , status )
+    call assert ( status == 0 .and. filedir_exists ( injected ) , "Error in shell safety : touch")
+    call filedir_copy ( injected , copied , status )
+    call assert ( status == 0 .and. filedir_exists ( copied ) , "Error in shell safety : copy")
+    call filedir_rename ( copied , renamed , status )
+    call assert ( status == 0 .and. filedir_exists ( renamed ) , "Error in shell safety : rename (1)")
+    call assert ( .not. filedir_exists ( copied ) , "Error in shell safety : rename (2)")
+    call assert ( .not. filedir_exists ( canary ) , "Error in shell safety : touch/copy/rename ran a command")
+    !
+    ! findByPattern : the pattern is only matched against names
+    !
+    pattern = filedir_join ( workdir , "*;touch " // trim(canary) )
+    call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
+    call assert ( numberOfFiles == 0 , "Error in shell safety : findByPattern (1)")
+    call assert ( .not. filedir_exists ( canary ) , "Error in shell safety : findByPattern ran a command")
+    deallocate ( listOfFiles )
+    pattern = filedir_join ( workdir , "a b;*" )
+    call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
+    call assert ( numberOfFiles == 1 , "Error in shell safety : findByPattern (2)")
+    if ( numberOfFiles == 1 ) then
+       write ( computed , "(400a)" ) listOfFiles ( : , 1 )
+       call assertString ( trim(computed) , trim(injected) , "Error in shell safety : findByPattern (3)")
+    endif
+    deallocate ( listOfFiles )
+    !
+    ! mkdir, then delete with force : symbolic links are removed, not followed
+    !
+    call filedir_mkdir ( subdir , status )
+    call assert ( status == 0 .and. filedir_isdirectory ( subdir ) , "Error in shell safety : mkdir")
+    call filedir_tempfile ( outside )
+    call symlnk ( trim(outside) , trim(filedir_join ( subdir , "link" )) , status )
+    call assert ( status == 0 , "Error in shell safety : symlink")
+    call filedir_delete ( subdir , status )
+    call assert ( status /= 0 , "Error in shell safety : delete non empty directory")
+    force = .true.
+    call filedir_delete ( subdir , force , status )
+    call assert ( status == 0 .and. .not. filedir_isdirectory ( subdir ) , "Error in shell safety : delete force")
+    call assert ( filedir_exists ( outside ) , "Error in shell safety : delete followed a symlink")
+    call assert ( .not. filedir_exists ( canary ) , "Error in shell safety : mkdir/delete ran a command")
+    call filedir_delete ( outside )
+    call filedir_delete ( workdir , force , status )
+    call assert ( status == 0 .and. .not. filedir_isdirectory ( workdir ) , "Error in shell safety : cleanup")
+  end subroutine test_m_filedir_shellsafety
   !
   ! assert --
   !   Check that the given test is true and updates the assertion system.

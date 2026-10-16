@@ -67,6 +67,22 @@
 !     platform_get_environment_variable     Get to one environment variable
 !     platform_cd                           Change the system current directory
 !     platform_stat                         Get status of a file
+!     platform_rename                       Rename a file or directory
+!     platform_remove_file                  Remove a file
+!     platform_mkdir                        Create a directory
+!     platform_rmdir                        Remove an empty directory
+!     platform_remove_tree                  Remove a directory and its content
+!     platform_touch                        Create a file / update its times
+!     platform_mkstemp                      Atomically create a unique file
+!     platform_dir_open                     Open a directory for listing
+!     platform_dir_next                     Get the next directory entry
+!     platform_dir_close                    Close a directory listing
+!     platform_fnmatch                      Match a name against a pattern
+!
+!   The file and directory services (platform_rename to platform_fnmatch)
+!   call the POSIX C library directly through ISO_C_BINDING: no shell is
+!   involved, so file names are never interpreted as shell syntax.
+!   They require platform_posix.c to be compiled and linked.
 !
 !   Pre-processing macros
 !
@@ -186,6 +202,8 @@ module m_platform
 #ifdef _PLATFORM_INTEL_FORTRAN_PORTABILITY_ROUTINES
   use ifport
 #endif
+  use, intrinsic :: iso_c_binding, only : c_int, c_char, c_ptr, c_null_char, &
+       c_null_ptr, c_associated, c_f_pointer, c_size_t
   implicit none
   private
   !
@@ -256,11 +274,101 @@ module m_platform
   public :: platform_stat
   public :: platform_osstring
   public :: platform_platformstring
+  public :: platform_rename
+  public :: platform_remove_file
+  public :: platform_mkdir
+  public :: platform_rmdir
+  public :: platform_remove_tree
+  public :: platform_touch
+  public :: platform_mkstemp
+  public :: platform_dir_open
+  public :: platform_dir_next
+  public :: platform_dir_close
+  public :: platform_fnmatch
   !
   ! Tags to manage errors.
   !
   integer , parameter, public :: PLATFORM_ERROR_OK = 0
   integer , parameter, public :: PLATFORM_ERROR_UNDEFINED_SERVICE = 1
+  !
+  ! fnmatch(3) flag : a leading period must be matched explicitly,
+  ! as in shell globbing. Same value in glibc, BSD and macOS.
+  !
+  integer(c_int), parameter :: PLATFORM_FNM_PERIOD = 4
+  !
+  ! POSIX C library services
+  !
+  interface
+     function c_rename ( oldpath , newpath ) bind ( C , name = "rename" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: oldpath, newpath
+       integer(c_int) :: c_rename
+     end function c_rename
+     function c_unlink ( path ) bind ( C , name = "unlink" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: c_unlink
+     end function c_unlink
+     function c_mkdir ( path , mode ) bind ( C , name = "mkdir" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int), value :: mode
+       integer(c_int) :: c_mkdir
+     end function c_mkdir
+     function c_rmdir ( path ) bind ( C , name = "rmdir" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: c_rmdir
+     end function c_rmdir
+     function c_utime ( path , times ) bind ( C , name = "utime" )
+       import :: c_int, c_char, c_ptr
+       character(kind=c_char), dimension(*), intent(in) :: path
+       type(c_ptr), value :: times
+       integer(c_int) :: c_utime
+     end function c_utime
+     function c_mkstemp ( template ) bind ( C , name = "mkstemp" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(inout) :: template
+       integer(c_int) :: c_mkstemp
+     end function c_mkstemp
+     function c_close ( fd ) bind ( C , name = "close" )
+       import :: c_int
+       integer(c_int), value :: fd
+       integer(c_int) :: c_close
+     end function c_close
+     function c_opendir ( path ) bind ( C , name = "opendir" )
+       import :: c_ptr, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       type(c_ptr) :: c_opendir
+     end function c_opendir
+     function c_closedir ( dir ) bind ( C , name = "closedir" )
+       import :: c_int, c_ptr
+       type(c_ptr), value :: dir
+       integer(c_int) :: c_closedir
+     end function c_closedir
+     function c_fnmatch ( pattern , string , flags ) bind ( C , name = "fnmatch" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: pattern, string
+       integer(c_int), value :: flags
+       integer(c_int) :: c_fnmatch
+     end function c_fnmatch
+     function c_strlen ( s ) bind ( C , name = "strlen" )
+       import :: c_ptr, c_size_t
+       type(c_ptr), value :: s
+       integer(c_size_t) :: c_strlen
+     end function c_strlen
+     ! Helpers from platform_posix.c
+     function c_readdir_name ( dir ) bind ( C , name = "flibs_platform_readdir_name" )
+       import :: c_ptr
+       type(c_ptr), value :: dir
+       type(c_ptr) :: c_readdir_name
+     end function c_readdir_name
+     function c_remove_tree ( path ) bind ( C , name = "flibs_platform_remove_tree" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: c_remove_tree
+     end function c_remove_tree
+  end interface
 
 contains
   !
@@ -490,6 +598,180 @@ contains
        status = local_status
     endif
   end subroutine platform_stat
+  !
+  ! platform_rename --
+  !   Rename oldpath to newpath with rename(2).
+  ! Arguments:
+  !   oldpath, newpath : the old and new names
+  !   status : 0 on success, nonzero otherwise
+  !
+  subroutine platform_rename ( oldpath , newpath , status )
+    character(len=*), intent(in) :: oldpath
+    character(len=*), intent(in) :: newpath
+    integer, intent(out) :: status
+    status = c_rename ( platform_cstring ( oldpath ) , platform_cstring ( newpath ) )
+  end subroutine platform_rename
+  !
+  ! platform_remove_file --
+  !   Remove the file (or symbolic link) path with unlink(2).
+  !
+  subroutine platform_remove_file ( path , status )
+    character(len=*), intent(in) :: path
+    integer, intent(out) :: status
+    status = c_unlink ( platform_cstring ( path ) )
+  end subroutine platform_remove_file
+  !
+  ! platform_mkdir --
+  !   Create the directory path with mkdir(2), mode 0777 minus the umask.
+  !
+  subroutine platform_mkdir ( path , status )
+    character(len=*), intent(in) :: path
+    integer, intent(out) :: status
+    status = c_mkdir ( platform_cstring ( path ) , int ( o'777' , c_int ) )
+  end subroutine platform_mkdir
+  !
+  ! platform_rmdir --
+  !   Remove the empty directory path with rmdir(2).
+  !
+  subroutine platform_rmdir ( path , status )
+    character(len=*), intent(in) :: path
+    integer, intent(out) :: status
+    status = c_rmdir ( platform_cstring ( path ) )
+  end subroutine platform_rmdir
+  !
+  ! platform_remove_tree --
+  !   Remove path and, if it is a directory, all of its content.
+  !   Symbolic links inside the tree are removed, never followed.
+  !
+  subroutine platform_remove_tree ( path , status )
+    character(len=*), intent(in) :: path
+    integer, intent(out) :: status
+    status = c_remove_tree ( platform_cstring ( path ) )
+  end subroutine platform_remove_tree
+  !
+  ! platform_touch --
+  !   Create path as an empty file if it does not exist, then set its
+  !   access and modification times to the current time with utime(2).
+  !
+  subroutine platform_touch ( path , status )
+    character(len=*), intent(in) :: path
+    integer, intent(out) :: status
+    integer :: file_unit
+    open ( newunit = file_unit , file = path , status = 'unknown' , &
+         action = 'write' , position = 'append' , iostat = status )
+    if ( status /= 0 ) return
+    close ( file_unit , iostat = status )
+    if ( status /= 0 ) return
+    status = c_utime ( platform_cstring ( path ) , c_null_ptr )
+  end subroutine platform_touch
+  !
+  ! platform_mkstemp --
+  !   Atomically create a new, unique file with mkstemp(3) (O_EXCL, mode 0600).
+  ! Arguments:
+  !   prefix : path prefix of the file, e.g. "/tmp/myapp_"; six random
+  !     characters are appended to it
+  !   path : the name of the created file (blank on error)
+  !   status : 0 on success, nonzero otherwise (including when path is too short)
+  !
+  subroutine platform_mkstemp ( prefix , path , status )
+    character(len=*), intent(in) :: prefix
+    character(len=*), intent(out) :: path
+    integer, intent(out) :: status
+    character(kind=c_char, len=len_trim(prefix)+7) :: template
+    integer(c_int) :: fd
+    integer :: n
+    path = ""
+    template = trim ( prefix ) // "XXXXXX" // c_null_char
+    n = len ( template ) - 1
+    if ( n > len ( path ) ) then
+       status = -1
+       return
+    endif
+    fd = c_mkstemp ( template )
+    if ( fd < 0 ) then
+       status = -1
+       return
+    endif
+    status = c_close ( fd )
+    path = template ( 1 : n )
+  end subroutine platform_mkstemp
+  !
+  ! platform_dir_open --
+  !   Open the directory dirname for listing with opendir(3).
+  ! Arguments:
+  !   dirname : the directory to list
+  !   handle : the directory handle, to pass to platform_dir_next and platform_dir_close
+  !   status : 0 on success, nonzero otherwise
+  !
+  subroutine platform_dir_open ( dirname , handle , status )
+    character(len=*), intent(in) :: dirname
+    type(c_ptr), intent(out) :: handle
+    integer, intent(out) :: status
+    handle = c_opendir ( platform_cstring ( dirname ) )
+    if ( c_associated ( handle ) ) then
+       status = 0
+    else
+       status = -1
+    endif
+  end subroutine platform_dir_open
+  !
+  ! platform_dir_next --
+  !   Get the name of the next entry (including "." and "..") of an opened directory.
+  ! Arguments:
+  !   handle : the directory handle
+  !   name : the entry name, allocated on return when found is true
+  !   found : .false. when there are no more entries
+  !
+  subroutine platform_dir_next ( handle , name , found )
+    type(c_ptr), intent(in) :: handle
+    character(len=:), allocatable, intent(out) :: name
+    logical, intent(out) :: found
+    type(c_ptr) :: cname
+    character(kind=c_char), dimension(:), pointer :: chars
+    integer :: n
+    integer :: i
+    cname = c_readdir_name ( handle )
+    found = c_associated ( cname )
+    if ( .not. found ) return
+    n = int ( c_strlen ( cname ) )
+    call c_f_pointer ( cname , chars , [ n ] )
+    allocate ( character(len=n) :: name )
+    do i = 1 , n
+       name ( i : i ) = chars ( i )
+    enddo
+  end subroutine platform_dir_next
+  !
+  ! platform_dir_close --
+  !   Close a directory handle opened with platform_dir_open.
+  !
+  subroutine platform_dir_close ( handle )
+    type(c_ptr), intent(inout) :: handle
+    integer(c_int) :: local_status
+    if ( c_associated ( handle ) ) then
+       local_status = c_closedir ( handle )
+    endif
+    handle = c_null_ptr
+  end subroutine platform_dir_close
+  !
+  ! platform_fnmatch --
+  !   Returns .true. if name matches the shell wildcard pattern (fnmatch(3)).
+  !   A leading period in name must be matched explicitly.
+  !
+  logical function platform_fnmatch ( pattern , name )
+    character(len=*), intent(in) :: pattern
+    character(len=*), intent(in) :: name
+    platform_fnmatch = c_fnmatch ( platform_cstring ( pattern ) , &
+         platform_cstring ( name ) , PLATFORM_FNM_PERIOD ) == 0
+  end function platform_fnmatch
+  !
+  ! platform_cstring --
+  !   Returns the null-terminated C string for the trimmed Fortran string.
+  !
+  function platform_cstring ( string ) result ( cstring )
+    character(len=*), intent(in) :: string
+    character(kind=c_char, len=:), allocatable :: cstring
+    cstring = trim ( string ) // c_null_char
+  end function platform_cstring
   !
   ! platform_error --
   !   Manage an error for the m_platform module

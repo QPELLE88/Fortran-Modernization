@@ -144,6 +144,10 @@ $(libdir)/%.o : $(srcdir)/platform/%.f90
 	$(FC) $(F90OPTS) -c $< -o $@
 	$(AR) cr $(archive_flibs) $@
 
+$(libdir)/%.o : $(srcdir)/platform/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+	$(AR) cr $(archive_flibs) $@
+
 $(libdir)/%.o : $(srcdir)/reporting/%.f90
 	$(FC) $(F90OPTS) -c $< -o $@
 	$(AR) cr $(archive_flibs) $@

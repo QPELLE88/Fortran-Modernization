@@ -50,6 +50,7 @@ $(libdir)/textstr.o
 # Objects from /src/platform
 objects_9 = \
 $(libdir)/m_platform.o \
+$(libdir)/platform_posix.o \
 $(libdir)/m_vstrplatform.o
 # Objects from /src/reporting
 objects_10 = \

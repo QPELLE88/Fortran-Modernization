@@ -39,6 +39,7 @@ $(libdir)/sorting.o:
 $(libdir)/vectors.o:
 
 $(libdir)/m_filedir.o:$(libdir)/m_platform.o
+$(libdir)/m_filedir.o:$(libdir)/platform_posix.o
 
 $(libdir)/m_vfile.o:$(libdir)/m_platform.o
 $(libdir)/m_vfile.o:$(libdir)/m_vstring.o
