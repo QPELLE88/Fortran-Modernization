@@ -1,14 +1,15 @@
 # vim: noexpandtab: tabstop=4:
 
 FLIBS=flibs-0.9/flibs/src
-LIBSQLITE3=$(shell find /usr -name libsqlite3.a -print -quit)
 
 FORTRAN=gfortran
-FORTRANFLAGS=-ldl -lfcgi -pthread -Wl,-rpath -Wl,/usr/lib
+CC=gcc
 
-ifndef $(LIBSQLITE3)
-FORTRANFLAGS=-ldl -lfcgi -lsqlite3 -pthread -Wl,-rpath -Wl,/usr/lib
-endif
+HARDENING=-fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE
+FORTRANFLAGS=-O2 -fcheck=bounds $(HARDENING)
+CFLAGS=-O2 $(HARDENING)
+LDFLAGS=-pie -Wl,-z,relro,-z,now
+LDLIBS=-lfcgi -lsqlite3 -pthread
 
 OBJECTS = \
 	marsupial.o \
@@ -20,29 +21,28 @@ OBJECTS = \
 	csqlite.o
 
 fortran_fcgi: fortran_fcgi.f90 $(OBJECTS)
-	$(FORTRAN) -o $@ $^ $(LIBSQLITE3) $(FORTRANFLAGS) 
+	$(FORTRAN) $(FORTRANFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 marsupial.o: marsupial.f90 string_helpers.o fsqlite.o
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 jade.o: jade.f90 string_helpers.o
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 string_helpers.o: string_helpers.f90
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 fsqlite.o: $(FLIBS)/sqlite/fsqlite.f90
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90
-	$(FORTRAN) -c $<
+	$(FORTRAN) $(FORTRANFLAGS) -c $<
 
 csqlite.o: $(FLIBS)/sqlite/csqlite.c
-	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
-	cp $(FLIBS)/sqlite/csqlite.o . 
+	$(CC) $(CFLAGS) -DLOWERCASE -c $< -o $@
 
 clean:
 	rm -f -v fortran_fcgi *.o *.mod $(FLIBS)/sqlite/*.o
