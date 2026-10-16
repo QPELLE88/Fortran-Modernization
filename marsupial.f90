@@ -120,7 +120,7 @@ module marsupial
   subroutine closeDatabase()
     if (dbOpen) then
       call sqlite3_close(db)
-      dbOpen = .false.
+      dbOpen = sqlite3_error(db)
     endif
   endsubroutine
 endmodule
