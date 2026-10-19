@@ -124,6 +124,10 @@ $(libdir)/%.o : $(srcdir)/filedir/%.f90
 	$(FC) $(F90OPTS) -c $< -o $@
 	$(AR) cr $(archive_flibs) $@
 
+$(libdir)/%.o : $(srcdir)/filedir/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+	$(AR) cr $(archive_flibs) $@
+
 $(libdir)/%.o : $(srcdir)/funit/%.f90
 	$(FC) $(F90OPTS) -c $< -o $@
 	$(AR) cr $(archive_flibs) $@

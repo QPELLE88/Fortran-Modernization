@@ -25,6 +25,7 @@ objects_3 =
 # Objects from /src/filedir
 objects_4 = \
 $(libdir)/m_filedir.o \
+$(libdir)/filedir_posix.o \
 $(libdir)/m_vfile.o \
 $(libdir)/m_fileunit.o
 # Objects from /src/funit
