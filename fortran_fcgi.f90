@@ -46,6 +46,7 @@ program test_fcgi
 
     ! before termination, it is good practice to close files that are open
     close(unitNo)
+    call closeDatabase()
 
     ! webserver will return an error since this process will now terminate
     unitNo = fcgip_accept_environment_variables()
