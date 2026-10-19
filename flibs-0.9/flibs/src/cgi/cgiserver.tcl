@@ -262,10 +262,18 @@ proc runNextProgram {} {
 #     httpdata     HTTP data sent by the client
 # Result:
 #     None
+# Note:
+#     Where possible the program is started in its own process group
+#     (via setsid), so that stopProgram can also kill any processes
+#     it started
 #
 proc startProgram {sock name httpdata} {
     file delete -force cgiout
     file delete -force cgiready
+
+    if { $::tcl_platform(platform) eq "unix" && [auto_execok setsid] ne "" } {
+        set name [list |setsid [string range [lindex $name 0] 1 end]]
+    }
 
     puts "Executing program $name ..."
     set inchan [open $name w+]
@@ -287,22 +295,34 @@ proc startProgram {sock name httpdata} {
 # Result:
 #     None
 # Note:
-#     The output is read into memory and the shared files are removed
-#     before the next request is started, so a slow client cannot hold
-#     up the queue and no other request can see this output
+#     Once "cgiready" exists, "cgiout" is opened, the program (and its
+#     process group) is killed and both files are removed before the
+#     next request is started. The open channel is then streamed to
+#     the client, so neither a slow client nor a lingering process can
+#     affect another request
 #
 proc waitForProgram {sock inchan deadline} {
+    set released 0
     if { [catch {
         if { [file exists cgiready] } {
-            catch {close $inchan}
             set outfile [open "cgiout"]
             fconfigure $outfile -translation binary
-            set data [read $outfile]
-            close $outfile
-            file delete -force cgiout
-            file delete -force cgiready
+            stopProgram $inchan
+            if { [file exists cgiout] } {
+                # The open file could not be removed (e.g. on Windows)
+                set data [read $outfile]
+                close $outfile
+                unset outfile
+                file delete -force cgiout
+            }
+            set released 1
             releaseProgram
-            sendProgramOutput $sock $data
+            if { [info exists data] } {
+                sendProgramOutput $sock $data
+            } else {
+                fconfigure $sock -translation binary
+                fcopy $outfile $sock -command [list done $outfile $sock]
+            }
         } elseif { [clock milliseconds] > $deadline } {
             stopProgram $inchan
             error "program did not finish within $::exeTimeout seconds"
@@ -313,8 +333,8 @@ proc waitForProgram {sock inchan deadline} {
         if { [info exists outfile] } {
             catch {close $outfile}
         }
-        if { ! [info exists data] } {
-            catch {close $inchan}
+        if { ! $released } {
+            stopProgram $inchan
             programError $sock $msg
         } else {
             puts "Error sending program output: $msg"
@@ -324,8 +344,9 @@ proc waitForProgram {sock inchan deadline} {
 }
 
 # stopProgram --
-#     Kill a program that is abandoned, so that it cannot write the
-#     files "cgiout" and "cgiready" while a later request is running
+#     Kill a program (and its process group) and remove the files
+#     "cgiout" and "cgiready", so that it cannot write them while a
+#     later request is running
 # Arguments:
 #     inchan       Channel of the program
 # Result:
@@ -334,12 +355,16 @@ proc waitForProgram {sock inchan deadline} {
 proc stopProgram {inchan} {
     catch {
         foreach p [pid $inchan] {
-            catch {exec kill -9 $p}
+            catch {exec kill -KILL -- -$p}
+            catch {exec kill -KILL $p}
         }
     }
-    catch {close $inchan}
-    file delete -force cgiout
-    file delete -force cgiready
+    catch {
+        fconfigure $inchan -blocking 0
+        close $inchan
+    }
+    catch {file delete -force cgiout}
+    catch {file delete -force cgiready}
 }
 
 # sendProgramOutput --
