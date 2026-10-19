@@ -8,7 +8,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <fnmatch.h>
+#include <glob.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -21,17 +22,37 @@
 #define O_NOCTTY 0
 #endif
 
-/* Return the name of the next entry of dir, or NULL at the end. */
-const char *flibs_filedir_readdir_name(DIR *dir)
+/* Expand a wildcard pattern like the shell does, without running a shell.
+   Returns a handle (NULL if none) and the number of sorted matches. */
+void *flibs_filedir_glob_open(const char *pattern, size_t *count)
 {
-    struct dirent *entry = readdir(dir);
-    return entry ? entry->d_name : NULL;
+    glob_t *g = calloc(1, sizeof *g);
+    *count = 0;
+    if (g == NULL)
+        return NULL;
+    if (glob(pattern, 0, NULL, g) == 0)
+        *count = g->gl_pathc;
+    return g;
 }
 
-/* Return 0 if name matches the shell wildcard pattern (leading "." must be explicit). */
-int flibs_filedir_fnmatch(const char *pattern, const char *name)
+const char *flibs_filedir_glob_path(void *g, size_t i)
 {
-    return fnmatch(pattern, name, FNM_PERIOD);
+    return ((glob_t *)g)->gl_pathv[i];
+}
+
+void flibs_filedir_glob_close(void *g)
+{
+    if (g == NULL)
+        return;
+    globfree((glob_t *)g);
+    free(g);
+}
+
+/* Return 1 if path is a directory (following symbolic links), 0 otherwise. */
+int flibs_filedir_isdir(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 int flibs_filedir_mkdir(const char *path)
@@ -42,6 +63,10 @@ int flibs_filedir_mkdir(const char *path)
 /* Create path if needed (as touch does) and set its times to now. */
 int flibs_filedir_touch(const char *path)
 {
+    if (utimensat(AT_FDCWD, path, NULL, 0) == 0)
+        return 0;
+    if (errno != ENOENT)
+        return -1;
     int fd = open(path, O_WRONLY | O_CREAT | O_NOCTTY | O_CLOEXEC, 0666);
     if (fd < 0)
         return -1;

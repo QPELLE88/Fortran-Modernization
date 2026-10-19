@@ -205,7 +205,6 @@ module m_filedir
        PLATFORM_PLATFORM_MAC, &
        PLATFORM_PLATFORM_NB, &
        platform_get_environment_variable , &
-       platform_cd, &
        platform_stat
   use, intrinsic :: iso_c_binding, only : c_int, c_char, c_ptr, c_size_t, &
        c_null_char, c_associated, c_f_pointer
@@ -310,26 +309,27 @@ module m_filedir
        character(kind=c_char), dimension(*), intent(in) :: src, dst
        integer(c_int) :: filedir_c_copy_file
      end function filedir_c_copy_file
-     function filedir_c_opendir ( path ) bind ( C , name = "opendir" )
-       import :: c_ptr, c_char
-       character(kind=c_char), dimension(*), intent(in) :: path
-       type(c_ptr) :: filedir_c_opendir
-     end function filedir_c_opendir
-     function filedir_c_closedir ( dir ) bind ( C , name = "closedir" )
-       import :: c_int, c_ptr
-       type(c_ptr), value :: dir
-       integer(c_int) :: filedir_c_closedir
-     end function filedir_c_closedir
-     function filedir_c_readdir_name ( dir ) bind ( C , name = "flibs_filedir_readdir_name" )
+     function filedir_c_glob_open ( pattern , count ) bind ( C , name = "flibs_filedir_glob_open" )
+       import :: c_ptr, c_char, c_size_t
+       character(kind=c_char), dimension(*), intent(in) :: pattern
+       integer(c_size_t), intent(out) :: count
+       type(c_ptr) :: filedir_c_glob_open
+     end function filedir_c_glob_open
+     function filedir_c_glob_path ( glob , i ) bind ( C , name = "flibs_filedir_glob_path" )
+       import :: c_ptr, c_size_t
+       type(c_ptr), value :: glob
+       integer(c_size_t), value :: i
+       type(c_ptr) :: filedir_c_glob_path
+     end function filedir_c_glob_path
+     subroutine filedir_c_glob_close ( glob ) bind ( C , name = "flibs_filedir_glob_close" )
        import :: c_ptr
-       type(c_ptr), value :: dir
-       type(c_ptr) :: filedir_c_readdir_name
-     end function filedir_c_readdir_name
-     function filedir_c_fnmatch ( pattern , name ) bind ( C , name = "flibs_filedir_fnmatch" )
+       type(c_ptr), value :: glob
+     end subroutine filedir_c_glob_close
+     function filedir_c_isdir ( path ) bind ( C , name = "flibs_filedir_isdir" )
        import :: c_int, c_char
-       character(kind=c_char), dimension(*), intent(in) :: pattern, name
-       integer(c_int) :: filedir_c_fnmatch
-     end function filedir_c_fnmatch
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_isdir
+     end function filedir_c_isdir
      function filedir_c_strlen ( s ) bind ( C , name = "strlen" )
        import :: c_ptr, c_size_t
        type(c_ptr), value :: s
@@ -939,87 +939,27 @@ contains
     ! listOfFiles ( : , ifile) is the file #ifile
     ! listOfFiles ( ichar , ifile ) is the character #ichar for file #ifile
     character, dimension(:,:), pointer :: listOfFiles
-    character(len=len(pattern)) :: directory
-    character(len=len(pattern)) :: namepattern
-    character(len=:), allocatable :: entryname
-    character(len=filelength), dimension(:), allocatable :: names
-    character(len=filelength), dimension(:), allocatable :: grown
-    character(len=filelength) :: current_filename
-    type(c_ptr) :: dirhandle
-    integer :: isep
+    character(len=:), allocatable :: path
+    type(c_ptr) :: globhandle
+    integer(c_size_t) :: count
     integer :: ifile
-    integer :: jfile
     integer :: icharacter
-    integer(c_int) :: close_status
-    logical :: with_prefix
     !
-    ! 1. Split the pattern into a directory and a file name pattern.
-    !    The wildcards of the last component are matched against the
-    !    entries of the directory : no shell and no temporary file are used.
+    ! The pattern is expanded by glob(3), as the shell would do,
+    ! but no shell runs : the matches are only file names.
+    ! The matches are sorted, as ls does.
     !
-    isep = filedir_last_separator_index ( pattern )
-    if ( isep == 0 ) then
-       directory = "."
-       namepattern = pattern
-       with_prefix = .false.
-    else
-       if ( isep == 1 ) then
-          directory = pattern ( 1 : 1 )
-       else
-          directory = pattern ( 1 : isep - 1 )
-       endif
-       namepattern = pattern ( isep + 1 : )
-       with_prefix = .true.
-    endif
-    !
-    ! 2. List the matching entries of the directory
-    !
-    numberOfFiles = 0
-    allocate ( names ( 1 : 16 ) )
-    dirhandle = filedir_c_opendir ( filedir_cstring ( directory ) )
-    if ( c_associated ( dirhandle ) ) then
-       do
-          call filedir_readdir ( dirhandle , entryname )
-          if ( .not. allocated ( entryname ) ) exit
-          if ( entryname == "." .or. entryname == ".." ) cycle
-          if ( filedir_c_fnmatch ( filedir_cstring ( namepattern ) , &
-               filedir_cstring ( entryname ) ) /= 0 ) cycle
-          if ( numberOfFiles == size ( names ) ) then
-             allocate ( grown ( 1 : 2 * size ( names ) ) )
-             grown ( 1 : numberOfFiles ) = names ( 1 : numberOfFiles )
-             call move_alloc ( grown , names )
-          endif
-          numberOfFiles = numberOfFiles + 1
-          if ( with_prefix ) then
-             names ( numberOfFiles ) = pattern ( 1 : isep ) // entryname
-          else
-             names ( numberOfFiles ) = entryname
-          endif
-       enddo
-       close_status = filedir_c_closedir ( dirhandle )
-    endif
-    !
-    ! 3. Sort the names, as ls does
-    !
-    do ifile = 2 , numberOfFiles
-       current_filename = names ( ifile )
-       jfile = ifile - 1
-       do while ( jfile >= 1 )
-          if ( .not. llt ( current_filename , names ( jfile ) ) ) exit
-          names ( jfile + 1 ) = names ( jfile )
-          jfile = jfile - 1
-       enddo
-       names ( jfile + 1 ) = current_filename
-    enddo
-    !
-    ! 4. Fill the array
-    !
+    globhandle = filedir_c_glob_open ( filedir_cstring ( pattern ) , count )
+    numberOfFiles = int ( count )
     allocate( listOfFiles(1:filelength , 1:numberOfFiles ) )
+    listOfFiles = " "
     do ifile = 1 , numberOfFiles
-       do icharacter = 1 , filelength
-          listOfFiles ( icharacter , ifile ) = names ( ifile ) ( icharacter : icharacter )
+       call filedir_fstring ( filedir_c_glob_path ( globhandle , int ( ifile - 1 , c_size_t ) ) , path )
+       do icharacter = 1 , min ( filelength , len ( path ) )
+          listOfFiles ( icharacter , ifile ) = path ( icharacter : icharacter )
        enddo
     enddo
+    call filedir_c_glob_close ( globhandle )
   end subroutine filedir_findByPattern
   !
   ! filedir_tempdir --
@@ -1383,17 +1323,7 @@ contains
   !
   logical function filedir_isdirectory ( dirname )
     character(len=*), intent(in) :: dirname
-    ! TODO : What if the current working directory is longer that the given directory name ?
-    character ( len=len(dirname)) :: cwd
-    integer :: status
-    call filedir_pwd ( cwd )
-    call platform_cd ( dirname , status )
-    if ( status == 0 ) then
-       filedir_isdirectory = .true.
-    else
-       filedir_isdirectory = .false.
-    endif
-    call platform_cd ( cwd )
+    filedir_isdirectory = filedir_c_isdir ( filedir_cstring ( dirname ) ) /= 0
   end function filedir_isdirectory
   !
   ! filedir_pathtype --
@@ -1727,26 +1657,22 @@ contains
     cstring = trim ( string ) // c_null_char
   end function filedir_cstring
   !
-  ! filedir_readdir --
-  !   Returns the name of the next entry of an opened directory,
-  !   or an unallocated name when there are no more entries.
+  ! filedir_fstring --
+  !   Copy a NUL-terminated C string into a Fortran string.
   !
-  subroutine filedir_readdir ( dirhandle , entryname )
-    type(c_ptr), intent(in) :: dirhandle
-    character(len=:), allocatable, intent(out) :: entryname
-    type(c_ptr) :: cname
+  subroutine filedir_fstring ( cstring , string )
+    type(c_ptr), intent(in) :: cstring
+    character(len=:), allocatable, intent(out) :: string
     character(kind=c_char), dimension(:), pointer :: chars
     integer :: n
     integer :: i
-    cname = filedir_c_readdir_name ( dirhandle )
-    if ( .not. c_associated ( cname ) ) return
-    n = int ( filedir_c_strlen ( cname ) )
-    call c_f_pointer ( cname , chars , [ n ] )
-    allocate ( character(len=n) :: entryname )
+    n = int ( filedir_c_strlen ( cstring ) )
+    call c_f_pointer ( cstring , chars , [ n ] )
+    allocate ( character(len=n) :: string )
     do i = 1 , n
-       entryname ( i : i ) = chars ( i )
+       string ( i : i ) = chars ( i )
     enddo
-  end subroutine filedir_readdir
+  end subroutine filedir_fstring
   !
   subroutine filedir_error ( origin , message )
     character(len=*), intent(in) :: origin

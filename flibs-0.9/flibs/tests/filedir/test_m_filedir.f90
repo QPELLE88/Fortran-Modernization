@@ -696,6 +696,8 @@ contains
     integer :: numberOfFiles
     integer :: status
     logical :: force
+    character(len=400) :: cwd_before
+    character(len=400) :: cwd_after
     call logmsg ( "Test #34 : shell metacharacters in file names" )
     force = .true.
     call filedir_tempfile ( workdir )
@@ -750,6 +752,38 @@ contains
     call assert ( filedir_exists ( outside ) , "Error in shell safety : delete followed a symlink")
     call assert ( .not. filedir_exists ( canary ) , "Error in shell safety : mkdir/delete ran a command")
     call filedir_delete ( outside )
+    !
+    ! wildcards in directory components are expanded
+    !
+    call filedir_mkdir ( filedir_join ( workdir , "sub1" ) , status )
+    call filedir_touch ( filedir_join ( filedir_join ( workdir , "sub1" ) , "f.txt" ) , status )
+    pattern = filedir_join ( filedir_join ( workdir , "s*" ) , "f.txt" )
+    call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
+    call assert ( numberOfFiles == 1 , "Error in shell safety : findByPattern directory wildcard")
+    deallocate ( listOfFiles )
+    !
+    ! touch an existing read-only file and a directory
+    !
+    call chmod ( trim(dashed) , "a-w" , status )
+    call filedir_touch ( dashed , status )
+    call assert ( status == 0 , "Error in shell safety : touch read-only file")
+    call chmod ( trim(dashed) , "u+w" , status )
+    call filedir_touch ( workdir , status )
+    call assert ( status == 0 , "Error in shell safety : touch directory")
+    !
+    ! copy into a short relative directory keeps the working directory
+    !
+    call filedir_pwd ( cwd_before )
+    call filedir_touch ( "flibs_rel_src.txt" , status )
+    if ( filedir_isdirectory ( "o" ) ) call filedir_delete ( "o" , force )
+    call filedir_mkdir ( "o" , status )
+    call filedir_copy ( "flibs_rel_src.txt" , "o" , status )
+    call filedir_pwd ( cwd_after )
+    call assert ( status == 0 .and. filedir_exists ( filedir_join ( "o" , "flibs_rel_src.txt" ) ) , &
+         "Error in shell safety : copy into relative directory")
+    call assertString ( trim(cwd_after) , trim(cwd_before) , "Error in shell safety : copy changed the working directory")
+    call filedir_delete ( "o" , force , status )
+    call filedir_delete ( "flibs_rel_src.txt" )
     !
     ! copy onto itself is refused and keeps the content
     !
