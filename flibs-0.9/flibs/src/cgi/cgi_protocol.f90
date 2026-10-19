@@ -487,9 +487,10 @@ end subroutine cgi_session_directory
 !     ID obtained by an attacker can be planted in a victim's form.
 !     Call cgi_new_session after any change of privilege (e.g. login).
 !
-!     If no session directory is set, /dev/urandom cannot be read, the
-!     ID cannot be recorded, or value is too short, value is set to
-!     blanks and any "sessionid" in the dictionary is blanked.
+!     If value is shorter than 32 characters, value is set to blanks
+!     and the dictionary is left alone. If no session directory is set,
+!     /dev/urandom cannot be read, or the ID cannot be recorded, value
+!     is set to blanks and any "sessionid" in the dictionary is blanked.
 !
 subroutine cgi_get_session( dict, value )
     type(DICT_STRUCT), pointer :: dict
@@ -497,11 +498,15 @@ subroutine cgi_get_session( dict, value )
 
     type(DICT_DATA)            :: data
 
+    if ( len(value) < SESSION_ID_LENGTH ) then
+        value = ' '
+        return
+    endif
+
     if ( associated(dict) ) then
         if ( dict_has_key( dict, "sessionid" ) ) then
             data = dict_get_key( dict, "sessionid" )
-            if ( cgi_session_is_issued( data%value ) .and. &
-                 len(value) >= SESSION_ID_LENGTH ) then
+            if ( cgi_session_is_issued( data%value ) ) then
                 value = data%value(1:SESSION_ID_LENGTH)
                 return
             endif
@@ -514,8 +519,8 @@ end subroutine cgi_get_session
 
 ! cgi_new_session --
 !     Issue a new session ID, replacing any "sessionid" in the dictionary
-!     (an issued ID found there is revoked once the new ID is recorded;
-!     if no new ID can be issued, the old one stays valid)
+!     (an issued ID found there is always revoked, even if no new ID can
+!     be issued, so a planted ID cannot survive a failed rotation)
 ! Arguments:
 !     dict          Dictionary with values
 !     value         New session ID (blank on failure, see cgi_get_session)
@@ -525,18 +530,16 @@ subroutine cgi_new_session( dict, value )
     character(len=*)           :: value
 
     character(len=SESSION_ID_LENGTH) :: id
-    character(len=DICT_VALUE_LENGTH) :: old_id
     type(DICT_DATA)                  :: data
     logical                          :: ok
     integer                          :: lu
     integer                          :: ierr
 
     value = ' '
-    old_id = ' '
     if ( associated(dict) ) then
         if ( dict_has_key( dict, "sessionid" ) ) then
             data = dict_get_key( dict, "sessionid" )
-            old_id = data%value
+            call cgi_revoke_session( data%value )
             data%value = ' '
             call dict_add_key( dict, "sessionid", data )
         endif
@@ -561,8 +564,6 @@ subroutine cgi_new_session( dict, value )
         return
     endif
     close( lu )
-
-    call cgi_revoke_session( old_id )
 
     value = id
     data%value = id
