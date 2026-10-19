@@ -289,7 +289,7 @@ module m_filedir
        character(kind=c_char), dimension(*), intent(in) :: path
        integer(c_int) :: filedir_c_mkdir
      end function filedir_c_mkdir
-     function filedir_c_rmdir ( path ) bind ( C , name = "rmdir" )
+     function filedir_c_rmdir ( path ) bind ( C , name = "flibs_filedir_rmdir" )
        import :: c_int, c_char
        character(kind=c_char), dimension(*), intent(in) :: path
        integer(c_int) :: filedir_c_rmdir

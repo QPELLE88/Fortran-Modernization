@@ -800,6 +800,24 @@ contains
     !
     call filedir_copy ( copied , copied , status )
     call assert ( status /= 0 .and. filedir_exists ( copied ) , "Error in shell safety : self copy")
+    !
+    ! force delete refuses . and .. before removing anything
+    !
+    call filedir_delete ( filedir_join ( workdir , "." ) , force , status )
+    call assert ( status /= 0 .and. filedir_exists ( copied ) , "Error in shell safety : delete force dir/.")
+    call filedir_delete ( filedir_join ( filedir_join ( workdir , "sub1" ) , ".." ) , force , status )
+    call assert ( status /= 0 .and. filedir_exists ( copied ) , "Error in shell safety : delete force dir/sub1/..")
+    call filedir_delete ( trim(filedir_join ( workdir , "." )) // "/" , force , status )
+    call assert ( status /= 0 .and. filedir_exists ( copied ) , "Error in shell safety : delete force dir/./")
+    !
+    ! deleting a symbolic link to a directory removes the link only
+    !
+    call symlnk ( trim(filedir_join ( workdir , "sub1" )) , trim(filedir_join ( workdir , "dirlink" )) , status )
+    call filedir_delete ( filedir_join ( workdir , "dirlink" ) , status )
+    call assert ( status == 0 .and. .not. filedir_isdirectory ( filedir_join ( workdir , "dirlink" ) ) , &
+         "Error in shell safety : delete directory symlink")
+    call assert ( filedir_exists ( filedir_join ( filedir_join ( workdir , "sub1" ) , "f.txt" ) ) , &
+         "Error in shell safety : delete directory symlink followed the link")
     call filedir_delete ( workdir , force , status )
     call assert ( status == 0 .and. .not. filedir_isdirectory ( workdir ) , "Error in shell safety : cleanup")
   end subroutine test_m_filedir_shellsafety

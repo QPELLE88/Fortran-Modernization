@@ -5,6 +5,7 @@
  *   have no special meaning.
  */
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -132,9 +133,65 @@ static int remove_tree_at(int dirfd, const char *name)
     return unlinkat(dirfd, name, AT_REMOVEDIR);
 }
 
+/*
+ * Nonzero if the last component of path (ignoring trailing slashes) is
+ * "." or "..", or path is empty.
+ */
+static int is_dot_path(const char *path)
+{
+    size_t end = strlen(path);
+    while (end > 0 && path[end - 1] == '/')
+        end--;
+    if (end == 0)
+        return path[0] == '\0';
+    size_t start = end;
+    while (start > 0 && path[start - 1] != '/')
+        start--;
+    size_t n = end - start;
+    return (n == 1 && path[start] == '.') ||
+           (n == 2 && path[start] == '.' && path[start + 1] == '.');
+}
+
+/*
+ * Like rm -r -f, refuse ".", ".." (in any position as last component) and
+ * the file-system root before anything is removed.
+ * A symbolic link is removed itself, whatever it points to.
+ */
 int flibs_filedir_remove_tree(const char *path)
 {
+    struct stat st;
+    if (is_dot_path(path)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (lstat(path, &st) != 0)
+        return -1;
+    if (S_ISLNK(st.st_mode))
+        return unlink(path);
+    char *resolved = realpath(path, NULL);
+    if (resolved == NULL)
+        return -1;
+    int is_root = strcmp(resolved, "/") == 0;
+    free(resolved);
+    if (is_root) {
+        errno = EPERM;
+        return -1;
+    }
     return remove_tree_at(AT_FDCWD, path);
+}
+
+/*
+ * Remove an empty directory, or a symbolic link (to a directory) itself,
+ * as rm does: the link is never followed.
+ */
+int flibs_filedir_rmdir(const char *path)
+{
+    struct stat st;
+    if (lstat(path, &st) != 0)
+        return -1;
+    if (S_ISLNK(st.st_mode))
+        return unlink(path);
+    return rmdir(path);
 }
 
 /*
