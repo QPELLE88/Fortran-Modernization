@@ -192,8 +192,8 @@ proc resolveUrlPath {tail} {
     if {[llength $split] <= $n || [lrange $split 0 [expr {$n-1}]] ne $root} {
         return ""
     }
-    set requested [string tolower [file extension [lindex $parts end]]]
-    set target    [string tolower [file extension $name]]
+    set requested [file extension [lindex $parts end]]
+    set target    [file extension $name]
     if {$requested ne $target && ($requested in {.tcl .exe} || $target in {.tcl .exe})} {
         return ""
     }
