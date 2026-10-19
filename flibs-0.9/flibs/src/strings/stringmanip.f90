@@ -128,6 +128,8 @@ end subroutine random_word
 !     String with second string inserted
 ! Note:
 !     - If the receiving string is not long enough, the result is truncated
+!       (nothing is written beyond len(string); pos outside 1..len(string)
+!       leaves the string unchanged)
 !     - The entire second string is inserted (including any trailing blanks)
 !
 subroutine string_insert( string, pos, second )
@@ -135,11 +137,15 @@ subroutine string_insert( string, pos, second )
     integer, intent(in)             :: pos
     character(len=*), intent(in)    :: second
 
-    integer                         :: length
+    integer                         :: n
 
-    length = len( second )
-    string(pos+length:)      = string(pos:)
-    string(pos:pos+length-1) = second
+    if ( pos < 1 .or. pos > len(string) ) return
+
+    n = min( len(second), len(string) - pos + 1 )
+    if ( pos + n <= len(string) ) then
+        string(pos+n:) = string(pos:)
+    endif
+    string(pos:pos+n-1) = second(1:n)
 
 end subroutine string_insert
 
@@ -180,6 +186,8 @@ subroutine string_replace( string, substr, replace )
 
     integer                         :: k
 
+    if ( len(substr) == 0 ) return
+
     k = index( string, substr )
     if ( k > 0 ) then
         call string_delete( string, k, len(substr) )
@@ -208,8 +216,11 @@ subroutine string_map( string, substr, replace )
     integer                         :: k
     integer                         :: start
 
+    if ( len(substr) == 0 ) return
+
     start = 1
     do
+        if ( start > len(string) ) exit
         k = index( string(start:), substr )
         if ( k > 0 ) then
             start = start + k - 1
