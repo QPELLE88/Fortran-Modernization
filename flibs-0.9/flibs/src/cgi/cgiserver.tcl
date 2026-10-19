@@ -52,9 +52,13 @@
 #     - The protocol is very simple, it does not cope well with text
 #       from a textarea control
 #     - No support for multiple instances of the same program at the
-#       moment (this requires directory and process management)
-#       This means among other things, that the output may get
-#       confused if more than process is running at the same time
+#       moment (this requires directory and process management).
+#       Because the protocol uses the fixed files "cgiout" and
+#       "cgiready", requests for programs are queued and handled
+#       strictly one at a time. A program that does not finish within
+#       "exeTimeout" seconds is killed so that it cannot block the queue.
+#       After creating "cgiready" a program has "exeGrace" milliseconds
+#       to exit (so that its output is flushed) before it is killed.
 #     - No checking of the incoming connections, you can do this
 #       however by redefining the "answer" procedure in the
 #       configuration file
@@ -166,19 +170,14 @@ proc serve sock {
             set name [list |tclsh $name]
         } elseif {[file extension $name] eq ".exe"} {
             set exe  1
-            set perm w+
-            set name [list |$name]
         } else {
            puts $sock "Content-Type: text/html;charset=$::encoding\n"
         }
-        set inchan [open $name $perm]
         if { $exe } {
-            puts "Executing program $name ..."
-            sendHttpData $inchan $args
-            waitForProgram
-            close $inchan
-            set inchan [open "cgiout"]
+            queueProgram $sock $name $args
+            return
         }
+        set inchan [open $name $perm]
 
         #
         # Copy the output to the client
@@ -209,6 +208,234 @@ proc done {file sock bytes {msg {}}} {
     close $sock
 }
 
+# Queue of pending requests for programs (*.exe) and a flag that
+# is set while one of them is being handled. The protocol uses the
+# fixed files "cgiout" and "cgiready", so only one program request
+# may be in progress at any time. exeTimeout is the maximum time (in
+# seconds) a program may take before it is killed, exeGrace the time
+# (in milliseconds) it may take to exit after creating "cgiready".
+#
+set exeQueue   {}
+set exeBusy    0
+set exeTimeout 60
+set exeGrace   5000
+
+# queueProgram --
+#     Register a request for a program and start it if none is running
+# Arguments:
+#     sock         Channel for the socket
+#     name         Command to open as a pipe
+#     httpdata     HTTP data sent by the client
+# Result:
+#     None
+#
+proc queueProgram {sock name httpdata} {
+    lappend ::exeQueue [list $sock $name $httpdata]
+    runNextProgram
+}
+
+# runNextProgram --
+#     Start the next queued program request, if no other one is active
+# Arguments:
+#     None
+# Result:
+#     None
+#
+proc runNextProgram {} {
+    if { $::exeBusy || [llength $::exeQueue] == 0 } {
+        return
+    }
+    set ::exeBusy  1
+    set request    [lindex $::exeQueue 0]
+    set ::exeQueue [lrange $::exeQueue 1 end]
+    lassign $request sock name httpdata
+
+    if { [catch {startProgram $sock $name $httpdata} msg] } {
+        programError $sock $msg
+    }
+}
+
+# startProgram --
+#     Remove the previous output files, start the program and send it
+#     the request data
+# Arguments:
+#     sock         Channel for the socket
+#     path         Full path of the program
+#     httpdata     HTTP data sent by the client
+# Result:
+#     None
+# Note:
+#     Where possible the program is started in its own process group
+#     (via setsid), so that stopProgram can also kill any processes
+#     it started
+#
+proc startProgram {sock path httpdata} {
+    file delete -force cgiout
+    file delete -force cgiready
+
+    set command [list $path]
+    if { $::tcl_platform(platform) eq "unix" && [auto_execok setsid] ne "" } {
+        set command [list setsid $path]
+    }
+
+    puts "Executing program $path ..."
+    set inchan [open "|$command" w+]
+    if { [catch {sendHttpData $inchan $httpdata} msg] } {
+        stopProgram $inchan
+        error $msg
+    }
+    fconfigure $inchan -blocking 0
+    set deadline [expr {[clock milliseconds] + 1000 * $::exeTimeout}]
+    waitForProgram $sock $inchan $deadline 0
+}
+
+# waitForProgram --
+#     Poll for the file "cgiready" and the end of the program without
+#     nesting the event loop, then send the output to its own client
+# Arguments:
+#     sock         Channel for the socket
+#     inchan       Channel of the program
+#     deadline     Time (in ms) after which the program is abandoned
+#     ready        Time (in ms) after which a program that created
+#                  "cgiready" is killed (0 if not created yet)
+# Result:
+#     None
+# Note:
+#     Once "cgiready" exists and the program has exited (or exeGrace
+#     has passed), "cgiout" is opened, the program (and its process
+#     group) is killed and both files are removed before the next
+#     request is started. The open channel is then streamed to the
+#     client, so neither a slow client nor a lingering process can
+#     affect another request
+#
+proc waitForProgram {sock inchan deadline ready} {
+    set released 0
+    if { [catch {
+        catch {read $inchan}
+        set exited [expr {[catch {eof $inchan} atEnd] || $atEnd}]
+        set now    [clock milliseconds]
+        if { $ready == 0 && [file exists cgiready] } {
+            set ready [expr {$now + $::exeGrace}]
+        }
+
+        if { $ready > 0 && ($exited || $now > $ready) } {
+            set outfile [open "cgiout"]
+            fconfigure $outfile -translation binary
+            stopProgram $inchan
+            if { [file exists cgiout] } {
+                # The open file could not be removed (e.g. on Windows).
+                # If it still cannot be removed, the next request fails
+                # in startProgram rather than seeing this output
+                set data [read $outfile]
+                close $outfile
+                unset outfile
+                catch {file delete -force cgiout}
+            }
+            set released 1
+            releaseProgram
+            if { [info exists data] } {
+                sendProgramOutput $sock $data
+            } else {
+                fconfigure $sock -translation binary
+                fcopy $outfile $sock -command [list done $outfile $sock]
+            }
+        } elseif { $ready == 0 && $exited } {
+            stopProgram $inchan
+            error "program exited without creating cgiready"
+        } elseif { $ready == 0 && $now > $deadline } {
+            stopProgram $inchan
+            error "program did not finish within $::exeTimeout seconds"
+        } else {
+            after 20 [list waitForProgram $sock $inchan $deadline $ready]
+        }
+    } msg] } {
+        if { [info exists outfile] } {
+            catch {close $outfile}
+        }
+        if { ! $released } {
+            stopProgram $inchan
+            programError $sock $msg
+        } else {
+            puts "Error sending program output: $msg"
+            catch {close $sock}
+        }
+    }
+}
+
+# stopProgram --
+#     Kill a program (and its process group) and remove the files
+#     "cgiout" and "cgiready", so that it cannot write them while a
+#     later request is running
+# Arguments:
+#     inchan       Channel of the program
+# Result:
+#     None
+#
+proc stopProgram {inchan} {
+    catch {
+        foreach p [pid $inchan] {
+            if { $::tcl_platform(platform) eq "windows" } {
+                catch {exec taskkill /F /T /PID $p}
+            } else {
+                catch {exec kill -KILL -- -$p}
+                catch {exec kill -KILL $p}
+            }
+        }
+    }
+    catch {
+        fconfigure $inchan -blocking 0
+        close $inchan
+    }
+    catch {file delete -force cgiout}
+    catch {file delete -force cgiready}
+}
+
+# sendProgramOutput --
+#     Send the output of a program to its client in the background
+# Arguments:
+#     sock         Channel for the socket
+#     data         Output of the program
+# Result:
+#     None
+#
+proc sendProgramOutput {sock data} {
+    fconfigure $sock -translation binary -blocking 0
+    puts -nonewline $sock $data
+    close $sock
+}
+
+# programError --
+#     Report a failed program request to its client (details are
+#     only logged) and start the next request
+# Arguments:
+#     sock         Channel for the socket
+#     msg          Error message
+# Result:
+#     None
+#
+proc programError {sock msg} {
+    puts "Error running program: $msg"
+    catch {
+        fconfigure $sock -translation binary
+        puts -nonewline $sock "Content-Type: text/plain;charset=$::encoding\n\n"
+        puts -nonewline $sock "Processing error: could not run program\n"
+        close $sock
+    }
+    releaseProgram
+}
+
+# releaseProgram --
+#     Mark the active program request as finished and start the next one
+# Arguments:
+#     None
+# Result:
+#     None
+#
+proc releaseProgram {} {
+    set ::exeBusy 0
+    after idle runNextProgram
+}
+
 # sendHttpData --
 #     Send key/value pairs to the CGI process
 # Arguments:
@@ -223,34 +450,12 @@ proc done {file sock bytes {msg {}}} {
 #     no ambiguity over them
 #
 proc sendHttpData {inchan httpdata} {
-    file delete -force cgiout
-    file delete -force cgiready
-
     puts $inchan %BEGIN%
     foreach keyvalue [split $httpdata "&"] {
         puts $inchan $keyvalue
     }
     puts $inchan %END%
     flush $inchan
-}
-
-# waitForProgram --
-#     Wait for the program to finish its job
-# Arguments:
-#     None
-# Result:
-#     None
-#
-proc waitForProgram {} {
-    checkFile cgiready
-    vwait continue
-}
-proc checkFile {name} {
-    if { [file exists $name] } {
-        set ::continue 1
-    } else {
-        after 20 [list checkFile $name]
-    }
 }
 
 # main --
