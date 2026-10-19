@@ -31,6 +31,7 @@ module marsupial
     ! columns
     character(len=*)		  :: query
     character(len=50)			:: name, latinName, wikiLink, description
+    character(len=2*len(query))	:: escaped
 
     ! If not found, we want to clear name so the caller knows.
     name = ""
@@ -43,8 +44,10 @@ module marsupial
     call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
     call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
 
-    call string_replace(query, "'", "''")
-    call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
+    escaped = query
+    call string_replace(escaped, "'", "''")
+    call sqlite3_prepare_select( db, 'marsupials', column, stmt, &
+      "WHERE INSTR(LOWER(name), LOWER('" // trim(escaped) // "')) LIMIT 4")
 
     i = 1
     do

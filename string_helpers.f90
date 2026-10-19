@@ -40,11 +40,15 @@ module string_helpers
       integer, intent(in)             :: pos
       character(len=*), intent(in)    :: second
 
-      integer                         :: length
+      integer                         :: n
 
-      length = len( second )
-      string(pos+length:)      = string(pos:)
-      string(pos:pos+length-1) = second
+      if ( pos < 1 .or. pos > len(string) ) return
+
+      n = min( len(second), len(string) - pos + 1 )
+      if ( pos + n <= len(string) ) then
+          string(pos+n:) = string(pos:)
+      endif
+      string(pos:pos+n-1) = second(1:n)
 
   end subroutine string_insert
 
@@ -64,8 +68,11 @@ module string_helpers
 
       integer                         :: k, p
 
+      if ( len(substr) == 0 ) return
+
       p = 1
       do
+        if ( p > len(string) ) exit
         k = index( string(p:), substr )
         if ( k > 0 ) then
           call string_delete( string(p:), k, len(substr) )
