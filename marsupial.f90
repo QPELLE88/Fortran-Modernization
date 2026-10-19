@@ -11,6 +11,7 @@ module marsupial
   type(SQLITE_STATEMENT)                      :: stmt
   type(SQLITE_COLUMN), dimension(:), pointer  :: column
   integer                                     :: i
+  integer                                     :: rc
   logical                                     :: finished
 
   contains
@@ -47,7 +48,10 @@ module marsupial
     call string_replace(query, "'", "''")
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
     if (sqlite3_error(db)) then
+      rc = db%error
+      deallocate( column )
       call sqlite3_close(db)
+      db%error = rc
       return
     endif
 
@@ -85,7 +89,10 @@ module marsupial
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
     if (sqlite3_error(db)) then
+      rc = db%error
+      deallocate( column )
       call sqlite3_close(db)
+      db%error = rc
       return
     endif
 
