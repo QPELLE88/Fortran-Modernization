@@ -46,6 +46,7 @@ program test_fcgi
 
     ! before termination, it is good practice to close files that are open
     close(unitNo)
+    call closeDatabase()
 
     ! webserver will return an error since this process will now terminate
     unitNo = fcgip_accept_environment_variables()
@@ -115,7 +116,9 @@ contains
             call cgi_get( dict, 'q', query)
             call getOneMarsupial(query, pagevars(1,2), pagevars(2,2), pagevars(3,2), pagevars(4,2))
 
-            if (len(trim(pagevars(1,2))) == 0) then
+            if (queryError /= 0) then
+              write(unitNo,AFORMAT) '<p>Database error, please try again later.</p>'
+            else if (len(trim(pagevars(1,2))) == 0) then
               write(unitNo,AFORMAT) '<p>No results in this database :-(</p>'
             else
               ! template with string
@@ -136,6 +139,9 @@ contains
             pagevars(4,1) = 'description'
 
             call getAllMarsupials(names, latinNames, wikiLinks, descriptions)
+            if (queryError /= 0) then
+              write(unitNo,AFORMAT) '<p>Database error, please try again later.</p>'
+            endif
 
             i = 1
             do

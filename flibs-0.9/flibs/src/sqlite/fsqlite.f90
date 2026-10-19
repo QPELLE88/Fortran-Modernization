@@ -701,11 +701,14 @@ end subroutine sqlite3_insert
 !    stmt          Prepared statement
 !    columns       Columns to be returned
 !    finished      Indicates there are no more data
+!    completion    (Optional) Result of sqlite3_step: SQLITE_ROW,
+!                  SQLITE_DONE or an error code such as SQLITE_BUSY
 !
-subroutine sqlite3_next_row( stmt, columns, finished )
+subroutine sqlite3_next_row( stmt, columns, finished, completion )
    type(SQLITE_STATEMENT)            :: stmt
    type(SQLITE_COLUMN), dimension(:) :: columns
    logical                           :: finished
+   integer, intent(out), optional    :: completion
 
    interface
       integer function sqlite3_column_int_c( handle, colidx, value )
@@ -736,6 +739,7 @@ subroutine sqlite3_next_row( stmt, columns, finished )
    integer                           :: i
 
    call sqlite3_step( stmt, rc )
+   if ( present(completion) ) completion = rc
 
    if ( rc .eq. SQLITE_ROW ) then
       finished = .false.
@@ -911,6 +915,8 @@ subroutine sqlite3_prepare( db, command, stmt, columns )
          call stringtof( columns(i)%name )
          call stringtof( columns(i)%type )
 
+         ! Expression columns have no declared type: read them as text
+         columns(i)%type_set = SQLITE_CHAR
          select case (columns(i)%type(1:4) )
          case( 'INT ', 'INTE' )
             columns(i)%type_set = SQLITE_INT
