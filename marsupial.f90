@@ -36,6 +36,7 @@ module marsupial
     name = ""
 
     call sqlite3_open('marsupials.sqlite3', db)
+    if (sqlite3_error(db)) return
 
     allocate( column(4) )
     call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
@@ -45,6 +46,10 @@ module marsupial
 
     call string_replace(query, "'", "''")
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
+    if (sqlite3_error(db)) then
+      call sqlite3_close(db)
+      return
+    endif
 
     i = 1
     do
@@ -63,7 +68,14 @@ module marsupial
     ! columns
     character(len=50), dimension(8)	:: name, latinName, wikiLink, description
 
+    ! Blank results let the caller detect an empty or failed query.
+    name = ""
+    latinName = ""
+    wikiLink = ""
+    description = ""
+
     call sqlite3_open('marsupials.sqlite3', db)
+    if (sqlite3_error(db)) return
 
     allocate( column(4) )
     call sqlite3_column_query( column(1), 'name', SQLITE_CHAR )
@@ -72,6 +84,10 @@ module marsupial
     call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
+    if (sqlite3_error(db)) then
+      call sqlite3_close(db)
+      return
+    endif
 
     i = 1
     do
