@@ -87,8 +87,9 @@ contains
             '</head>', &
             '<body>'
 
-        ! retrieve script name (key=DOCUMENT_URI) from dictionary
-        call cgi_get( dict, "DOCUMENT_URI", scriptName )
+        ! route on the server-provided DOCUMENT_URI, never on request parameters
+        call get_environment_variable( "DOCUMENT_URI", scriptName )
+        if ( len_trim(scriptName) == 0 ) scriptName = '/'
 
         select case (trim(scriptName))
           case ('/')
