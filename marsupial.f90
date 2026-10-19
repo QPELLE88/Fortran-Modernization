@@ -3,7 +3,6 @@
 
 module marsupial
   use sqlite
-  use string_helpers
 
   implicit none
 
@@ -43,8 +42,10 @@ module marsupial
     call sqlite3_column_query( column(3), 'wikiLink', SQLITE_CHAR )
     call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
 
-    call string_replace(query, "'", "''")
-    call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
+    call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER(?)) LIMIT 4")
+    if ( sqlite3_error( db ) ) return
+    call sqlite3_bind_text( db, stmt, 1, trim(query) )
+    if ( sqlite3_error( db ) ) return
 
     i = 1
     do
