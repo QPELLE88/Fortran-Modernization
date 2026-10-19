@@ -136,49 +136,99 @@ module string_helpers
     enddo
   end function html_escape_unquoted
 
-  ! decodes &amp; &lt; &gt; &quot; &apos; and ASCII numeric character
-  ! references, so a URL prefix can be read the way a browser reads it
+  ! Decodes character references that can change how a URL is read: ASCII
+  ! numeric references (with or without the trailing ';') and the named ones
+  ! for HTML and URL syntax characters (&amp; &colon; &sol; &commat; ...).
+  ! Used so a URL prefix can be analysed the way a browser reads it.
   function html_unescape(str) result(decoded)
     character(len=*), intent(in)  :: str
-    character(len=:), allocatable :: decoded, ref
-    integer                       :: i, semi, code
+    character(len=:), allocatable :: decoded
+    integer                       :: i, j, k, semi, code, base
 
     decoded = ''
     i = 1
     do while (i <= len(str))
-      semi = 0
-      if (str(i:i) == '&') semi = index(str(i:min(len(str), i + 9)), ';')
-      if (semi > 2) then
-        ref = to_lower(str(i + 1:i + semi - 2))
-        code = -1
-        select case (ref)
-          case ('amp')
-            code = iachar('&')
-          case ('lt')
-            code = iachar('<')
-          case ('gt')
-            code = iachar('>')
-          case ('quot')
-            code = iachar('"')
-          case ('apos')
-            code = iachar("'")
-          case default
-            if (len(ref) > 2 .and. ref(1:2) == '#x') then
-              code = parse_digits(ref(3:), 16)
-            else if (len(ref) > 1 .and. ref(1:1) == '#') then
-              code = parse_digits(ref(2:), 10)
+      code = -1
+      if (str(i:i) == '&' .and. i < len(str)) then
+        if (str(i + 1:i + 1) == '#') then
+          j = i + 2
+          base = 10
+          if (j <= len(str)) then
+            if (str(j:j) == 'x' .or. str(j:j) == 'X') then
+              base = 16
+              j = j + 1
             endif
-        end select
-        if (code >= 0 .and. code < 128) then
-          decoded = decoded // achar(code)
-          i = i + semi
-          cycle
+          endif
+          k = j
+          do while (k <= len(str))
+            if (parse_digits(to_lower(str(k:k)), base) < 0) exit
+            k = k + 1
+          enddo
+          if (k > j) then
+            code = parse_digits(to_lower(str(j:k - 1)), base)
+            if (k <= len(str)) then
+              if (str(k:k) == ';') k = k + 1
+            endif
+          endif
+        else
+          semi = index(str(i:min(len(str), i + 10)), ';')
+          if (semi > 2) then
+            code = named_reference(str(i + 1:i + semi - 2))
+            k = i + semi
+          endif
         endif
       endif
-      decoded = decoded // str(i:i)
-      i = i + 1
+      if (code >= 0 .and. code < 128) then
+        decoded = decoded // achar(code)
+        i = k
+      else
+        decoded = decoded // str(i:i)
+        i = i + 1
+      endif
     enddo
   end function html_unescape
+
+  ! ASCII code of a named character reference relevant to HTML or URL syntax, -1 otherwise
+  integer function named_reference(name)
+    character(len=*), intent(in) :: name
+
+    select case (name)
+      case ('amp', 'AMP')
+        named_reference = iachar('&')
+      case ('lt', 'LT')
+        named_reference = iachar('<')
+      case ('gt', 'GT')
+        named_reference = iachar('>')
+      case ('quot', 'QUOT')
+        named_reference = iachar('"')
+      case ('apos')
+        named_reference = iachar("'")
+      case ('colon')
+        named_reference = iachar(':')
+      case ('sol')
+        named_reference = iachar('/')
+      case ('bsol')
+        named_reference = iachar('\')
+      case ('quest')
+        named_reference = iachar('?')
+      case ('num')
+        named_reference = iachar('#')
+      case ('commat')
+        named_reference = iachar('@')
+      case ('period')
+        named_reference = iachar('.')
+      case ('percnt')
+        named_reference = iachar('%')
+      case ('equals')
+        named_reference = iachar('=')
+      case ('Tab')
+        named_reference = 9
+      case ('NewLine')
+        named_reference = 10
+      case default
+        named_reference = -1
+    end select
+  end function named_reference
 
   ! value of a short run of decimal or hex digits, -1 if it has any other character
   integer function parse_digits(digits, base)
@@ -217,9 +267,16 @@ module string_helpers
     character(len=*), parameter   :: HEX = '0123456789ABCDEF'
     integer                       :: i, c, j
 
-    p = prefix
-    do i = 1, len(p)
-      if (p(i:i) == '\') p(i:i) = '/'
+    p = ''
+    do i = 1, len(prefix)
+      c = iachar(prefix(i:i))
+      if (c == 9 .or. c == 10 .or. c == 13) cycle
+      if (len(p) == 0 .and. c <= 32) cycle
+      if (prefix(i:i) == '\') then
+        p = p // '/'
+      else
+        p = p // prefix(i:i)
+      endif
     enddo
     j = scheme_length(p)
     rest = p(j + 1:)

@@ -30,7 +30,11 @@ program test_jade
   call check_url('/search?q=', 'a&b=c#d', 'a%26b%3Dc%23d')
   call check_url(html_unescape('https://en.wikipedia.org&#64;'), 'x', '/x')
   call check_url(html_unescape('https://en.wikipedia.org&#x40;'), '//x', '//x')
-  if (html_unescape('a&amp;b&#64;&#x2F;&nope;') /= 'a&b@/&nope;') then
+  call check_url(html_unescape('https&colon;//trusted.example'), '@evil.example', '/@evil.example')
+  call check_url(html_unescape('https&#58//trusted.example'), '@evil.example', '/@evil.example')
+  call check_url(html_unescape('&sol;'), '//evil.example', 'evil.example')
+  call check_url(html_unescape(' https:/&Tab;/trusted.example'), '@evil.example', '/@evil.example')
+  if (html_unescape('a&amp;b&#64;&#x2F;&nope;&#58x') /= 'a&b@/&nope;:x') then
     failures = failures + 1
     print '(a)', 'FAIL: html_unescape'
   endif
