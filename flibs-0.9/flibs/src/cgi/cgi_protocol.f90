@@ -487,8 +487,9 @@ end subroutine cgi_session_directory
 !     ID obtained by an attacker can be planted in a victim's form.
 !     Call cgi_new_session after any change of privilege (e.g. login).
 !
-!     If value is shorter than 32 characters, value is set to blanks
-!     and the dictionary is left alone. If no session directory is set,
+!     If value is shorter than 32 characters, value is set to blanks,
+!     an issued "sessionid" is kept and any other "sessionid" in the
+!     dictionary is blanked. If no session directory is set,
 !     /dev/urandom cannot be read, or the ID cannot be recorded, value
 !     is set to blanks and any "sessionid" in the dictionary is blanked.
 !
@@ -500,6 +501,15 @@ subroutine cgi_get_session( dict, value )
 
     if ( len(value) < SESSION_ID_LENGTH ) then
         value = ' '
+        if ( associated(dict) ) then
+            if ( dict_has_key( dict, "sessionid" ) ) then
+                data = dict_get_key( dict, "sessionid" )
+                if ( .not. cgi_session_is_issued( data%value ) ) then
+                    data%value = ' '
+                    call dict_add_key( dict, "sessionid", data )
+                endif
+            endif
+        endif
         return
     endif
 
