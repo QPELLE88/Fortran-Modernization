@@ -105,9 +105,10 @@ contains
 !    column        Column information
 !    primary       Name of the primary key
 !
-character(len=40) function typename( column, primary )
+function typename( column, primary )
    type(SQLITE_COLUMN), intent(in) :: column
    character(len=*), intent(in)    :: primary
+   character(len=len(column%type)+len(' primary key')) :: typename
 
    if ( column%name .ne. primary ) then
       typename = column%type
@@ -125,8 +126,9 @@ end function typename
 ! Arguments:
 !    column        Column information
 !
-character(len=80) function column_func( column )
+function column_func( column )
    type(SQLITE_COLUMN), intent(in) :: column
+   character(len=len(column%function)+len(column%name)+2) :: column_func
 
    if ( column%function .ne. ' ' ) then
       column_func = trim(column%function) // '(' // trim(column%name) // ')'
@@ -159,10 +161,12 @@ end subroutine stringtof
 ! Arguments:
 !    string        String to be converted
 ! Note:
-!    It is assumed that the last character
-!    is a space. As this is a private
-!    routine, this should have been taken
-!    care of in the caller.
+!    The string must have at least one trailing
+!    space to hold the NUL terminator: callers
+!    pass a copy declared with len(original)+1.
+!    A full buffer is a programming error and
+!    stops the program instead of writing past
+!    the end.
 !
 subroutine stringtoc( string )
    character(len=*) :: string
@@ -170,6 +174,9 @@ subroutine stringtoc( string )
    integer          :: last
 
    last = 1 + len_trim(string)
+   if ( last .gt. len(string) ) then
+      error stop 'fsqlite: stringtoc: no room for the NUL terminator'
+   endif
    string(last:last) = char(0)
 
 end subroutine stringtoc
@@ -540,7 +547,7 @@ subroutine sqlite3_create_table( db, tablename, columns, primary )
    type(SQLITE_COLUMN), dimension(:)  :: columns
    character(len=*), optional         :: primary
 
-   character(len=20+80*size(columns)) :: command
+   character(len=:), allocatable      :: command
    character(len=40)                  :: primary_
    integer                            :: i
    integer                            :: ncols
@@ -550,11 +557,18 @@ subroutine sqlite3_create_table( db, tablename, columns, primary )
       primary_ = primary
    endif
 
+   !
+   ! Build the command with a deferred-length string, so that
+   ! long column lists are never truncated
+   !
    ncols = size(columns)
-   write( command, '(100a)' ) 'create table ', tablename, ' (', &
-      ( trim(columns(i)%name), ' ', trim(typename(columns(i), primary_)), ', ', &
-           i = 1,ncols-1 ), &
-      trim(columns(ncols)%name), ' ', trim(typename(columns(ncols),primary_)), ')'
+   command = 'create table ' // trim(tablename) // ' ('
+   do i = 1,ncols-1
+      command = command // trim(columns(i)%name) // ' ' // &
+         trim(typename(columns(i), primary_)) // ', '
+   enddo
+   command = command // trim(columns(ncols)%name) // ' ' // &
+      trim(typename(columns(ncols), primary_)) // ')'
 
    call sqlite3_do( db, command )
 end subroutine sqlite3_create_table
@@ -578,29 +592,29 @@ subroutine sqlite3_prepare_select( db, tablename, columns, stmt, extra_clause )
    character(len=*), optional                  :: extra_clause
    type(SQLITE_STATEMENT), intent(out)         :: stmt
 
-   character(len=20+80*size(columns))          :: command
+   character(len=:), allocatable               :: command
    integer                                     :: nocols
    integer                                     :: i
 
    !
    ! Prepare the select statement for this table
    !
-   ! TODO: expand the syntax!!
+   ! The command is a deferred-length string, so the extra
+   ! clause is appended in full rather than silently truncated
+   ! (sqlite3_prepare adds the NUL terminator)
    !
    nocols = size(columns)
-   write( command, '(100a)' ) 'select ', &
-      (trim(column_func(columns(i))), ',', i = 1,nocols-1), &
-       trim(column_func(columns(nocols))), &
-      ' from ', trim(tablename)
+   command = 'select '
+   do i = 1,nocols-1
+      command = command // trim(column_func(columns(i))) // ','
+   enddo
+   command = command // trim(column_func(columns(nocols))) // &
+      ' from ' // trim(tablename)
 
-   !
-   ! Hm, appending a string of arbitrary length is tricky ...
-   !
    if ( present(extra_clause) ) then
-      command = trim(command) // ' ' // extra_clause
+      command = command // ' ' // extra_clause
    endif
 
-   call stringtoc( command )
    call sqlite3_prepare( db, command, stmt, columns )
 
 end subroutine sqlite3_prepare_select
@@ -618,7 +632,7 @@ subroutine sqlite3_insert( db, tablename, columns )
    type(SQLITE_DATABASE)                       :: db
    character(len=*)                            :: tablename
    type(SQLITE_COLUMN), dimension(:), target   :: columns
-   character(len=20+80*size(columns))          :: command
+   character(len=:), allocatable               :: command
 
    type(SQLITE_COLUMN), dimension(:), pointer  :: prepared_columns
    type(SQLITE_STATEMENT)                      :: stmt
@@ -660,10 +674,9 @@ subroutine sqlite3_insert( db, tablename, columns )
    !
    ! Prepare the insert statement for this table
    !
-   write( command, '(100a)' ) 'insert into ', trim(tablename), ' values(', &
-      ('?,', i = 1,size(columns)-1), '?)'
+   command = 'insert into ' // trim(tablename) // ' values(' // &
+      repeat('?,', size(columns)-1) // '?)'
 
-   call stringtoc( command )
    prepared_columns => columns
    call sqlite3_prepare( db, command, stmt, prepared_columns )
 
