@@ -13,6 +13,9 @@ module marsupial
   integer                                     :: i
   logical                                     :: finished
   logical                                     :: dbOpen = .false.
+  integer                                     :: stepRc
+  ! Non-zero after a getOneMarsupial/getAllMarsupials call whose query failed
+  integer                                     :: queryError = 0
 
   contains
 
@@ -35,6 +38,7 @@ module marsupial
 
     ! If not found, we want to clear name so the caller knows.
     name = ""
+    queryError = 0
 
     if (.not. openDatabase()) return
     call allocateColumns()
@@ -42,14 +46,18 @@ module marsupial
     call string_replace(query, "'", "''")
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
     if (sqlite3_error(db)) then
+      queryError = db%error
       call releaseRequest()
       return
     endif
 
     i = 1
     do
-      call sqlite3_next_row(stmt, column, finished)
-      if (finished) exit
+      call sqlite3_next_row(stmt, column, finished, stepRc)
+      if (finished) then
+        if (stepRc /= SQLITE_DONE) queryError = stepRc
+        exit
+      endif
 
       call sqlite3_get_column(column(1), name)
       call sqlite3_get_column(column(2), latinName)
@@ -66,20 +74,29 @@ module marsupial
     character(len=50), dimension(8)	:: name, latinName, wikiLink, description
 
     name = ""
+    queryError = 0
 
     if (.not. openDatabase()) return
     call allocateColumns()
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
     if (sqlite3_error(db)) then
+      queryError = db%error
       call releaseRequest()
       return
     endif
 
     i = 1
     do
-      call sqlite3_next_row(stmt, column, finished)
-      if (finished) exit
+      call sqlite3_next_row(stmt, column, finished, stepRc)
+      if (finished) then
+        if (stepRc /= SQLITE_DONE) then
+          ! Don't hand back a partial list
+          queryError = stepRc
+          name = ""
+        endif
+        exit
+      endif
 
       call sqlite3_get_column(column(1), name(i))
       call sqlite3_get_column(column(2), latinName(i))
@@ -100,6 +117,7 @@ module marsupial
     if (sqlite3_error(db)) then
       ! the C wrapper already closed the failed handle
       db%db_handle = 0
+      queryError = db%error
     else
       dbOpen = .true.
     endif
