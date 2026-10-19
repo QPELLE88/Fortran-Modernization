@@ -52,9 +52,10 @@
 #     - The protocol is very simple, it does not cope well with text
 #       from a textarea control
 #     - No support for multiple instances of the same program at the
-#       moment (this requires directory and process management)
-#       This means among other things, that the output may get
-#       confused if more than process is running at the same time
+#       moment (this requires directory and process management).
+#       Because the protocol uses the fixed files "cgiout" and
+#       "cgiready", requests for programs are queued and handled
+#       strictly one at a time.
 #     - No checking of the incoming connections, you can do this
 #       however by redefining the "answer" procedure in the
 #       configuration file
@@ -171,14 +172,11 @@ proc serve sock {
         } else {
            puts $sock "Content-Type: text/html;charset=$::encoding\n"
         }
-        set inchan [open $name $perm]
         if { $exe } {
-            puts "Executing program $name ..."
-            sendHttpData $inchan $args
-            waitForProgram
-            close $inchan
-            set inchan [open "cgiout"]
+            queueProgram $sock $name $args
+            return
         }
+        set inchan [open $name $perm]
 
         #
         # Copy the output to the client
@@ -209,6 +207,156 @@ proc done {file sock bytes {msg {}}} {
     close $sock
 }
 
+# Queue of pending requests for programs (*.exe) and a flag that
+# is set while one of them is being handled. The protocol uses the
+# fixed files "cgiout" and "cgiready", so only one program request
+# may be in progress at any time.
+#
+set exeQueue {}
+set exeBusy  0
+
+# queueProgram --
+#     Register a request for a program and start it if none is running
+# Arguments:
+#     sock         Channel for the socket
+#     name         Command to open as a pipe
+#     httpdata     HTTP data sent by the client
+# Result:
+#     None
+#
+proc queueProgram {sock name httpdata} {
+    lappend ::exeQueue [list $sock $name $httpdata]
+    runNextProgram
+}
+
+# runNextProgram --
+#     Start the next queued program request, if no other one is active
+# Arguments:
+#     None
+# Result:
+#     None
+#
+proc runNextProgram {} {
+    if { $::exeBusy || [llength $::exeQueue] == 0 } {
+        return
+    }
+    set ::exeBusy  1
+    set request    [lindex $::exeQueue 0]
+    set ::exeQueue [lrange $::exeQueue 1 end]
+    lassign $request sock name httpdata
+
+    if { [catch {startProgram $sock $name $httpdata} msg] } {
+        programError $sock $msg
+    }
+}
+
+# startProgram --
+#     Remove the previous output files, start the program and send it
+#     the request data
+# Arguments:
+#     sock         Channel for the socket
+#     name         Command to open as a pipe
+#     httpdata     HTTP data sent by the client
+# Result:
+#     None
+#
+proc startProgram {sock name httpdata} {
+    file delete -force cgiout
+    file delete -force cgiready
+
+    puts "Executing program $name ..."
+    set inchan [open $name w+]
+    if { [catch {sendHttpData $inchan $httpdata} msg] } {
+        catch {close $inchan}
+        error $msg
+    }
+    waitForProgram $sock $inchan
+}
+
+# waitForProgram --
+#     Poll for the file "cgiready" without nesting the event loop, then
+#     send the program's output to its own client
+# Arguments:
+#     sock         Channel for the socket
+#     inchan       Channel of the program
+# Result:
+#     None
+#
+proc waitForProgram {sock inchan} {
+    if { [catch {
+        if { [file exists cgiready] } {
+            catch {close $inchan}
+            set outfile [open "cgiout"]
+            fconfigure $outfile -translation binary
+            fconfigure $sock    -translation binary
+            fcopy $outfile $sock -command [list programDone $outfile $sock]
+        } else {
+            after 20 [list waitForProgram $sock $inchan]
+        }
+    } msg] } {
+        catch {close $inchan}
+        if { [info exists outfile] } {
+            catch {close $outfile}
+        }
+        programError $sock $msg
+    }
+}
+
+# programDone --
+#     Callback for the fcopy command of a program request - close the
+#     channels, remove the output files and start the next request
+# Arguments:
+#     outfile      Channel for the file "cgiout"
+#     sock         Outgoing channel (the client)
+#     bytes        Number of bytes that was sent
+#     msg          Any message from the fcopy command
+# Result:
+#     None
+#
+proc programDone {outfile sock bytes {msg {}}} {
+    catch {close $outfile}
+    catch {close $sock}
+    if { [catch {
+        file delete -force cgiout
+        file delete -force cgiready
+    } msg] } {
+        puts "Error removing program output: $msg"
+    }
+    releaseProgram
+}
+
+# programError --
+#     Report a failed program request to its client (details are
+#     only logged) and start the next request
+# Arguments:
+#     sock         Channel for the socket
+#     msg          Error message
+# Result:
+#     None
+#
+proc programError {sock msg} {
+    puts "Error running program: $msg"
+    catch {
+        fconfigure $sock -translation binary
+        puts -nonewline $sock "Content-Type: text/plain;charset=$::encoding\n\n"
+        puts -nonewline $sock "Processing error: could not run program\n"
+        close $sock
+    }
+    releaseProgram
+}
+
+# releaseProgram --
+#     Mark the active program request as finished and start the next one
+# Arguments:
+#     None
+# Result:
+#     None
+#
+proc releaseProgram {} {
+    set ::exeBusy 0
+    after idle runNextProgram
+}
+
 # sendHttpData --
 #     Send key/value pairs to the CGI process
 # Arguments:
@@ -223,34 +371,12 @@ proc done {file sock bytes {msg {}}} {
 #     no ambiguity over them
 #
 proc sendHttpData {inchan httpdata} {
-    file delete -force cgiout
-    file delete -force cgiready
-
     puts $inchan %BEGIN%
     foreach keyvalue [split $httpdata "&"] {
         puts $inchan $keyvalue
     }
     puts $inchan %END%
     flush $inchan
-}
-
-# waitForProgram --
-#     Wait for the program to finish its job
-# Arguments:
-#     None
-# Result:
-#     None
-#
-proc waitForProgram {} {
-    checkFile cgiready
-    vwait continue
-}
-proc checkFile {name} {
-    if { [file exists $name] } {
-        set ::continue 1
-    } else {
-        after 20 [list checkFile $name]
-    }
 }
 
 # main --
