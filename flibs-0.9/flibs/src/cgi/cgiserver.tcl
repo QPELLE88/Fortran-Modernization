@@ -25,6 +25,7 @@
 #       ".." segments are refused outright (403).
 #     - Tcl scripts and programs (.tcl/.exe) are only run from the
 #       cgi-bin directory below the root; elsewhere they are refused.
+#       Files in the cgi-bin directory are never sent as static content.
 #     - There is no authentication, so by default the server only
 #       listens on 127.0.0.1.
 #
@@ -218,16 +219,31 @@ proc resolveUrlPath {tail} {
         return ""
     }
 
+    #
+    # The cgi-bin directory must lie within the root; if it does not,
+    # nothing is executed
+    #
+    set cgibin [realPath [file join $root $::cgibin]]
+    set incgibin 0
+    if {$cgibin eq $root || [isBelow $cgibin $root]} {
+        set incgibin [isBelow $name $cgibin]
+    }
+
     switch -- $target {
         .tcl    {set action tcl}
         .exe    {set action exe}
-        default {return [list $name static]}
+        default {set action static}
     }
-    set cgibin [realPath [file join $root $::cgibin]]
-    if {![isBelow $cgibin $root] && $cgibin ne $root} {
-        return ""
-    }
-    if {![isBelow $name $cgibin]} {
+    if {$action ne "static"} {
+        if {!$incgibin} {
+            return ""
+        }
+    } elseif {($incgibin && $cgibin ne $root) || [string tolower $target] in {.tcl .exe}} {
+        #
+        # Never send the contents of the cgi-bin directory, nor files
+        # that merely differ in case from a script/program (case-insensitive
+        # file systems)
+        #
         return ""
     }
     return [list $name $action]
