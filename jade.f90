@@ -3,21 +3,24 @@ module jade
 
   implicit none
 
+  integer, parameter, private :: CTX_TEXT = 0, CTX_QUOTED = 1, CTX_UNQUOTED = 2
+
   contains
 
   ! Renders templatefile, then fills placeholders in a single pass so that
   ! substituted values are never expanded again:
-  !   #{key}  value is HTML-escaped; inside a URL attribute (href, src, ...)
-  !           it is also forced to a same-host path and percent-encoded
+  !   #{key}  value is HTML-escaped for where it lands (text, quoted or
+  !           unquoted attribute); inside a URL attribute (href, src, ...) it
+  !           is also kept on the template's host and percent-encoded
   !   !{key}  value is written raw; only use for trusted markup
-  ! Unknown keys are left as they are.
+  ! Unknown keys and unclosed openers are left as they are.
   subroutine jadetemplate(templatefile, unitNo, replacements)
     character(len=10000)         :: templatefile
-    integer                      :: unitNo, i, n, p, start, keyEnd
+    integer                      :: unitNo, i, k, n, p, start, keyEnd, ctx
     character(len=*), dimension(10,2)    :: replacements
     character(len=3)   :: AFORMAT = '(a)'
-    character(len=:), allocatable :: rendered, piece, urlPrefix
-    logical            :: raw
+    character(len=:), allocatable :: rendered, piece, value, urlPrefix
+    logical            :: isUrl
 
     call jadefile(templatefile, 0)
 
@@ -25,26 +28,36 @@ module jade
     n = len_trim(templatefile)
     p = 1
     do while (p <= n)
-      start = next_placeholder(templatefile(p:n))
+      start = placeholder_index(templatefile(p:n), .false.)
       if (start == 0) exit
       start = p + start - 1
       keyEnd = index(templatefile(start + 2:n), '}')
       if (keyEnd == 0) exit
       keyEnd = start + 1 + keyEnd
+      ! an unclosed opener before this one is literal text
+      k = placeholder_index(templatefile(start + 2:keyEnd - 1), .true.)
+      if (k > 0) start = start + 1 + k
 
       piece = templatefile(p:start - 1)
       rendered = rendered // piece
-      raw = templatefile(start:start) == '!'
 
       i = find_key(replacements, templatefile(start + 2:keyEnd - 1))
       if (i == 0) then
         piece = templatefile(start:keyEnd)
-      else if (raw) then
+      else if (templatefile(start:start) == '!') then
         piece = trim(replacements(i, 2))
-      else if (in_url_attribute(rendered, urlPrefix)) then
-        piece = html_escape(url_path_escape(urlPrefix, trim(replacements(i, 2))))
       else
-        piece = html_escape(trim(replacements(i, 2)))
+        call attribute_context(rendered, ctx, isUrl, urlPrefix)
+        if (isUrl) then
+          value = url_path_escape(html_unescape(urlPrefix), trim(replacements(i, 2)))
+        else
+          value = trim(replacements(i, 2))
+        endif
+        if (ctx == CTX_UNQUOTED) then
+          piece = html_escape_unquoted(value)
+        else
+          piece = html_escape(value)
+        endif
       endif
       rendered = rendered // piece
       p = keyEnd + 1
@@ -56,19 +69,20 @@ module jade
     write(unitNo, AFORMAT) rendered
   endsubroutine
 
-  ! position of the first "#{" or "!{" in str, 0 if none
-  integer function next_placeholder(str)
+  ! position of the first (or last) "#{" or "!{" in str, 0 if none
+  integer function placeholder_index(str, last)
     character(len=*), intent(in) :: str
+    logical, intent(in)          :: last
     integer                      :: escaped, raw
 
-    escaped = index(str, '#{')
-    raw = index(str, '!{')
-    if (escaped == 0) then
-      next_placeholder = raw
-    else if (raw == 0) then
-      next_placeholder = escaped
+    escaped = index(str, '#{', back=last)
+    raw = index(str, '!{', back=last)
+    if (escaped == 0 .or. raw == 0) then
+      placeholder_index = max(escaped, raw)
+    else if (last) then
+      placeholder_index = max(escaped, raw)
     else
-      next_placeholder = min(escaped, raw)
+      placeholder_index = min(escaped, raw)
     endif
   endfunction
 
@@ -88,52 +102,113 @@ module jade
     enddo
   endfunction
 
-  ! True when the end of html is inside a double-quoted URL attribute value
-  ! of an open tag; prefix is the part of that value written so far.
-  ! Earlier substitutions are escaped, so they cannot fake '<', '>' or '"'.
-  logical function in_url_attribute(html, prefix)
+  ! Scans html (the output so far) and reports where the next character lands:
+  ! ctx is CTX_TEXT, CTX_QUOTED (inside a quoted attribute value) or
+  ! CTX_UNQUOTED (unquoted value, or inside a tag outside any value); isUrl
+  ! and prefix (the value written so far) describe a URL attribute.
+  ! Earlier substitutions are escaped, so they cannot fake '<', '>' or quotes.
+  subroutine attribute_context(html, ctx, isUrl, prefix)
     character(len=*), intent(in)               :: html
+    integer, intent(out)                       :: ctx
+    logical, intent(out)                       :: isUrl
     character(len=:), allocatable, intent(out) :: prefix
-    character(len=:), allocatable              :: tagText, attrName
-    integer                                    :: lt, q, nameEnd, nameStart, i, quotes
 
-    in_url_attribute = .false.
+    integer, parameter :: S_TEXT = 0, S_TAG = 1, S_AFTER_EQ = 2, S_QUOTED = 3, S_UNQUOTED = 4
+    character(len=*), parameter :: SPACES = ' ' // achar(9) // achar(10) // achar(12) // achar(13)
+    character(len=:), allocatable :: attrName
+    character(len=1)   :: c, quote
+    integer            :: i, k, n, state, nameStart, valueStart
+
+    n = len(html)
+    state = S_TEXT
+    attrName = ''
+    quote = '"'
+    nameStart = 0
+    valueStart = 1
+    i = 1
+    do while (i <= n)
+      c = html(i:i)
+      select case (state)
+        case (S_TEXT)
+          if (c == '<' .and. i < n) then
+            if (index(html(i:), '<!--') == 1) then
+              k = index(html(i + 4:), '-->')
+              if (k == 0) exit
+              i = i + 4 + k + 2
+              cycle
+            endif
+            if (is_tag_start(html(i + 1:i + 1))) then
+              state = S_TAG
+              nameStart = 0
+            endif
+          endif
+        case (S_TAG)
+          if (c == '>') then
+            state = S_TEXT
+          else if (c == '=') then
+            if (nameStart > 0) attrName = to_lower(html(nameStart:i - 1))
+            nameStart = 0
+            state = S_AFTER_EQ
+          else if (index(SPACES, c) > 0 .or. c == '/') then
+            if (nameStart > 0) attrName = to_lower(html(nameStart:i - 1))
+            nameStart = 0
+          else if (nameStart == 0) then
+            nameStart = i
+          endif
+        case (S_AFTER_EQ)
+          if (c == '"' .or. c == "'") then
+            quote = c
+            valueStart = i + 1
+            state = S_QUOTED
+          else if (c == '>') then
+            state = S_TEXT
+          else if (index(SPACES, c) == 0) then
+            valueStart = i
+            state = S_UNQUOTED
+          endif
+        case (S_QUOTED)
+          if (c == quote) state = S_TAG
+        case (S_UNQUOTED)
+          if (c == '>') then
+            state = S_TEXT
+          else if (index(SPACES, c) > 0) then
+            state = S_TAG
+          endif
+      end select
+      i = i + 1
+    enddo
+
+    ctx = CTX_TEXT
+    isUrl = .false.
     prefix = ''
-    lt = index(html, '<', back=.true.)
-    if (lt == 0 .or. index(html, '>', back=.true.) > lt) return
-    tagText = html(lt + 1:)
+    select case (state)
+      case (S_TAG)
+        ctx = CTX_UNQUOTED
+      case (S_AFTER_EQ)
+        ctx = CTX_UNQUOTED
+        isUrl = is_url_attribute(attrName)
+      case (S_QUOTED, S_UNQUOTED)
+        ctx = CTX_QUOTED
+        if (state == S_UNQUOTED) ctx = CTX_UNQUOTED
+        isUrl = is_url_attribute(attrName)
+        prefix = html(valueStart:n)
+    end select
+  endsubroutine
 
-    quotes = 0
-    do i = 1, len(tagText)
-      if (tagText(i:i) == '"') quotes = quotes + 1
-    enddo
-    if (mod(quotes, 2) == 0) return
+  logical function is_tag_start(c)
+    character(len=1), intent(in) :: c
 
-    q = index(tagText, '"', back=.true.)
-    nameEnd = q - 1
-    do while (nameEnd > 0)
-      if (tagText(nameEnd:nameEnd) /= ' ') exit
-      nameEnd = nameEnd - 1
-    enddo
-    if (nameEnd < 2) return
-    if (tagText(nameEnd:nameEnd) /= '=') return
-    nameEnd = nameEnd - 1
-    do while (nameEnd > 0)
-      if (tagText(nameEnd:nameEnd) /= ' ') exit
-      nameEnd = nameEnd - 1
-    enddo
-    nameStart = nameEnd
-    do while (nameStart > 1)
-      if (tagText(nameStart - 1:nameStart - 1) == ' ') exit
-      nameStart = nameStart - 1
-    enddo
-    if (nameEnd < nameStart) return
-    attrName = to_lower(tagText(nameStart:nameEnd))
+    is_tag_start = (c >= 'a' .and. c <= 'z') .or. (c >= 'A' .and. c <= 'Z') .or. c == '/' .or. c == '!'
+  endfunction
 
-    select case (attrName)
-      case ('href', 'src', 'action', 'formaction', 'cite', 'poster', 'data', 'background')
-        in_url_attribute = .true.
-        prefix = tagText(q + 1:)
+  logical function is_url_attribute(name)
+    character(len=*), intent(in) :: name
+
+    select case (name)
+      case ('href', 'src', 'action', 'formaction', 'cite', 'poster', 'data', 'background', 'xlink:href')
+        is_url_attribute = .true.
+      case default
+        is_url_attribute = .false.
     end select
   endfunction
 
