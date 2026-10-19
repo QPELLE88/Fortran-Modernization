@@ -80,6 +80,8 @@ contains
         ! Write debugging information to file unit number 'unitNo', which must already be open
         ! Debugging information should begin with %REMARK%, so as not to be sent
         !     to the webserver, see fcgi_put_file()
+        ! Never write request data here: an embedded newline would end the
+        !     %REMARK% record and the rest would be sent to the client
 
         type(DICT_STRUCT), pointer        :: dict
         integer, intent(in)               :: unitNo
@@ -109,23 +111,23 @@ contains
         endif
         iLen = len_trim(content)
         call cgi_store_dict( dict, content(:iLen) )
-        write(unitNo, AFORMAT) '%REMARK% added to dictionary: '//content(:iLen)
+        write(unitNo, '(a,i0)') '%REMARK% added to dictionary: DOCUMENT_URI, length ', iLen
 
         ! QUERY_STRING (request method was GET) ?
         call get_environment_variable( "QUERY_STRING", value=content, length=iLen, status=iStat )
         if ( iStat == 0 ) then
-            write(unitNo, AFORMAT) '%REMARK% QUERY_STRING='//trim(content)
+            write(unitNo, '(a,i0)') '%REMARK% QUERY_STRING length ', iLen
             if ( iLen > 0 ) then
                     call cgi_store_dict( dict, content(:iLen) )
-                    write(unitNo, AFORMAT) '%REMARK% added to dictionary: QUERY_STRING='//content(:iLen)
+                    write(unitNo, AFORMAT) '%REMARK% added to dictionary: QUERY_STRING'
             end if
         endif
 
         ! anything in CONTENT_LENGTH (request method was POST) ?
         call get_environment_variable( "CONTENT_LENGTH", value=content, status=iStat )
         if ( iStat == 0 ) then
-            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH='//trim(content)
             iLen = len_trim(content)
+            write(unitNo, AFORMAT) '%REMARK% CONTENT_LENGTH present'
             if ( iLen > 0 ) then
                 read( content, * ) iLen
                 do i=1,iLen
@@ -134,7 +136,7 @@ contains
                 end do
                 content( iLen+1: ) = ' '
                 call cgi_store_dict( dict, content(:iLen) )
-                write(unitNo, AFORMAT) '%REMARK% added to dictionary: CONTENT='//content(:iLen)
+                write(unitNo, '(a,i0)') '%REMARK% added to dictionary: CONTENT, length ', iLen
             end if
         endif
 
