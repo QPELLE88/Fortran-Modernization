@@ -244,67 +244,112 @@ proc runNextProgram {} {
     set request    [lindex $::exeQueue 0]
     set ::exeQueue [lrange $::exeQueue 1 end]
     lassign $request sock name httpdata
-    set ::clientSock $sock
 
+    if { [catch {startProgram $sock $name $httpdata} msg] } {
+        programError $sock $msg
+    }
+}
+
+# startProgram --
+#     Remove the previous output files, start the program and send it
+#     the request data
+# Arguments:
+#     sock         Channel for the socket
+#     name         Command to open as a pipe
+#     httpdata     HTTP data sent by the client
+# Result:
+#     None
+#
+proc startProgram {sock name httpdata} {
     file delete -force cgiout
     file delete -force cgiready
 
     puts "Executing program $name ..."
-    if { [catch {
-        set inchan [open $name w+]
-        sendHttpData $inchan $httpdata
-    } msg] } {
-        if { [info exists inchan] } {
-            catch {close $inchan}
-        }
-        finishProgram $sock "" "Processing error: could not run program\n"
-        puts "Error running program $name: $msg"
-        return
+    set inchan [open $name w+]
+    if { [catch {sendHttpData $inchan $httpdata} msg] } {
+        catch {close $inchan}
+        error $msg
     }
-    checkFile cgiready [list programReady $sock $inchan]
+    waitForProgram $sock $inchan
 }
 
-# programReady --
-#     Collect the output of the program and send it to its own client
+# waitForProgram --
+#     Poll for the file "cgiready" without nesting the event loop, then
+#     send the program's output to its own client
 # Arguments:
 #     sock         Channel for the socket
 #     inchan       Channel of the program
 # Result:
 #     None
 #
-proc programReady {sock inchan} {
-    set ::clientSock $sock
-    catch {close $inchan}
-    set data ""
+proc waitForProgram {sock inchan} {
     if { [catch {
-        set outfile [open "cgiout"]
-        fconfigure $outfile -translation binary
-        set data [read $outfile]
-        close $outfile
+        if { [file exists cgiready] } {
+            catch {close $inchan}
+            set outfile [open "cgiout"]
+            fconfigure $outfile -translation binary
+            fconfigure $sock    -translation binary
+            fcopy $outfile $sock -command [list programDone $outfile $sock]
+        } else {
+            after 20 [list waitForProgram $sock $inchan]
+        }
     } msg] } {
-        puts "Error reading program output: $msg"
+        catch {close $inchan}
+        programError $sock $msg
     }
-    file delete -force cgiout
-    file delete -force cgiready
-    finishProgram $sock $data ""
 }
 
-# finishProgram --
-#     Send the result to the client, then start the next queued request
+# programDone --
+#     Callback for the fcopy command of a program request - close the
+#     channels, remove the output files and start the next request
 # Arguments:
-#     sock         Channel for the socket
-#     data         Program output (binary)
-#     text         Text to send instead (used on errors)
+#     outfile      Channel for the file "cgiout"
+#     sock         Outgoing channel (the client)
+#     bytes        Number of bytes that was sent
+#     msg          Any message from the fcopy command
 # Result:
 #     None
 #
-proc finishProgram {sock data text} {
+proc programDone {outfile sock bytes {msg {}}} {
+    catch {close $outfile}
+    catch {close $sock}
+    if { [catch {
+        file delete -force cgiout
+        file delete -force cgiready
+    } msg] } {
+        puts "Error removing program output: $msg"
+    }
+    releaseProgram
+}
+
+# programError --
+#     Report a failed program request to its client (details are
+#     only logged) and start the next request
+# Arguments:
+#     sock         Channel for the socket
+#     msg          Error message
+# Result:
+#     None
+#
+proc programError {sock msg} {
+    puts "Error running program: $msg"
     catch {
         fconfigure $sock -translation binary
-        puts -nonewline $sock $data
-        puts -nonewline $sock $text
+        puts -nonewline $sock "Content-Type: text/plain;charset=$::encoding\n\n"
+        puts -nonewline $sock "Processing error: could not run program\n"
         close $sock
     }
+    releaseProgram
+}
+
+# releaseProgram --
+#     Mark the active program request as finished and start the next one
+# Arguments:
+#     None
+# Result:
+#     None
+#
+proc releaseProgram {} {
     set ::exeBusy 0
     after idle runNextProgram
 }
@@ -329,23 +374,6 @@ proc sendHttpData {inchan httpdata} {
     }
     puts $inchan %END%
     flush $inchan
-}
-
-# checkFile --
-#     Poll for the file that signals the program has finished, then
-#     invoke the callback (without nesting the event loop)
-# Arguments:
-#     name         Name of the file
-#     callback     Command to run once the file exists
-# Result:
-#     None
-#
-proc checkFile {name callback} {
-    if { [file exists $name] } {
-        uplevel #0 $callback
-    } else {
-        after 20 [list checkFile $name $callback]
-    }
 }
 
 # main --
