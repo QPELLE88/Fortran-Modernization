@@ -38,6 +38,16 @@ module cgi_protocol
     integer, private, save     :: luout_cgi = -1
     logical, private, save     :: header_written
 
+    integer, parameter, private :: SESSION_ID_BYTES  = 16  ! 128 bits
+    integer, parameter, private :: SESSION_ID_LENGTH = 2 * SESSION_ID_BYTES
+    character(len=16), parameter, private :: hex_digits = '0123456789abcdef'
+    character(len=DICT_VALUE_LENGTH), private, save :: session_dir = ' '
+
+    private :: cgi_session_is_issued
+    private :: cgi_revoke_session
+    private :: cgi_random_session_id
+    private :: cgi_free_unit
+
 !
 ! Body of source code for storing and retrieving the data
 ! (also contains the CONTAINS clause)
@@ -437,35 +447,265 @@ subroutine cgi_error( msg, template )
 
 end subroutine cgi_error
 
+! cgi_session_directory --
+!     Set the directory in which issued session IDs are recorded
+! Arguments:
+!     dir           Directory name (must exist and be readable and writable
+!                   only by the CGI application, e.g. mode 0700: the issued
+!                   IDs are the file names). An empty string, or a name
+!                   longer than DICT_VALUE_LENGTH, disables sessions
+!
+subroutine cgi_session_directory( dir )
+    character(len=*), intent(in) :: dir
+
+    if ( len_trim(dir) > len(session_dir) ) then
+        session_dir = ' '
+    else
+        session_dir = dir
+    endif
+
+end subroutine cgi_session_directory
+
 ! cgi_get_session --
 !     Get the value of the "sessionid" variable
 ! Arguments:
 !     dict          Dictionary with values
-!     value         Value of the session ID (character(len=20))
+!     value         Value of the session ID (character(len=32) or longer)
 ! Note:
 !     The session ID can be used to uniquely identify the
 !     connection with the user. But it should be passed into the
 !     HTML output as a hidden variable (see the documentation
 !     for more information)
 !
+!     A client-supplied "sessionid" is only accepted if it was issued
+!     earlier by cgi_new_session, i.e. it is a 32-character lowercase
+!     hex string with a matching file in the directory set via
+!     cgi_session_directory. Otherwise a new ID is issued.
+!
+!     Limits: the helper only issues and recognises IDs. It does not
+!     expire them, bind them to a user, or authenticate anyone, and an
+!     ID obtained by an attacker can be planted in a victim's form.
+!     Call cgi_new_session after any change of privilege (e.g. login).
+!
+!     If value is shorter than 32 characters, value is set to blanks,
+!     an issued "sessionid" is kept and any other "sessionid" in the
+!     dictionary is blanked. If no session directory is set,
+!     /dev/urandom cannot be read, or the ID cannot be recorded, value
+!     is set to blanks and any "sessionid" in the dictionary is blanked.
+!
 subroutine cgi_get_session( dict, value )
     type(DICT_STRUCT), pointer :: dict
     character(len=*)           :: value
 
-    character(len=20)          :: time_string
     type(DICT_DATA)            :: data
 
-    if ( dict_has_key( dict, "sessionid" ) ) then
-        data = dict_get_key( dict, "sessionid" )
-        value = data%value
-    else
-        call date_and_time( time = time_string )
-        value = time_string(5:6) // time_string(8:10)
-        data%value = value
-        call dict_add_key( dict, "sessionid", data )
+    if ( len(value) < SESSION_ID_LENGTH ) then
+        value = ' '
+        if ( associated(dict) ) then
+            if ( dict_has_key( dict, "sessionid" ) ) then
+                data = dict_get_key( dict, "sessionid" )
+                if ( .not. cgi_session_is_issued( data%value ) ) then
+                    data%value = ' '
+                    call dict_add_key( dict, "sessionid", data )
+                endif
+            endif
+        endif
+        return
     endif
 
+    if ( associated(dict) ) then
+        if ( dict_has_key( dict, "sessionid" ) ) then
+            data = dict_get_key( dict, "sessionid" )
+            if ( cgi_session_is_issued( data%value ) ) then
+                value = data%value(1:SESSION_ID_LENGTH)
+                return
+            endif
+        endif
+    endif
+
+    call cgi_new_session( dict, value )
+
 end subroutine cgi_get_session
+
+! cgi_new_session --
+!     Issue a new session ID, replacing any "sessionid" in the dictionary
+!     (an issued ID found there is always revoked, even if no new ID can
+!     be issued, so a planted ID cannot survive a failed rotation; if it
+!     cannot be revoked, no new ID is issued and value is blank)
+! Arguments:
+!     dict          Dictionary with values
+!     value         New session ID (blank on failure, see cgi_get_session)
+!
+subroutine cgi_new_session( dict, value )
+    type(DICT_STRUCT), pointer :: dict
+    character(len=*)           :: value
+
+    character(len=SESSION_ID_LENGTH) :: id
+    type(DICT_DATA)                  :: data
+    logical                          :: ok
+    integer                          :: lu
+    integer                          :: ierr
+
+    value = ' '
+    if ( associated(dict) ) then
+        if ( dict_has_key( dict, "sessionid" ) ) then
+            data = dict_get_key( dict, "sessionid" )
+            call cgi_revoke_session( data%value, ok )
+            data%value = ' '
+            call dict_add_key( dict, "sessionid", data )
+            if ( .not. ok ) then
+                return
+            endif
+        endif
+    endif
+
+    if ( len(value) < SESSION_ID_LENGTH .or. len_trim(session_dir) == 0 ) then
+        return
+    endif
+
+    call cgi_random_session_id( id, ok )
+    if ( .not. ok ) then
+        return
+    endif
+
+    lu = cgi_free_unit()
+    if ( lu < 0 ) then
+        return
+    endif
+    open( lu, file = trim(session_dir) // '/' // id, status = 'new', &
+        action = 'write', iostat = ierr )
+    if ( ierr /= 0 ) then
+        return
+    endif
+    close( lu )
+
+    value = id
+    data%value = id
+    if ( associated(dict) ) then
+        call dict_add_key( dict, "sessionid", data )
+    else
+        call dict_create( dict, "sessionid", data )
+    endif
+
+end subroutine cgi_new_session
+
+! cgi_revoke_session --
+!     Remove the record of an issued session ID, so it is no longer accepted
+! Arguments:
+!     id            Session ID to revoke (ignored if it was not issued)
+!     ok            False if the ID is still accepted afterwards
+!
+subroutine cgi_revoke_session( id, ok )
+    character(len=*), intent(in) :: id
+    logical, intent(out)         :: ok
+
+    integer :: lu
+    integer :: ierr
+
+    ok = .true.
+    if ( .not. cgi_session_is_issued( id ) ) then
+        return
+    endif
+
+    lu = cgi_free_unit()
+    if ( lu >= 0 ) then
+        open( lu, file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
+            status = 'old', action = 'read', iostat = ierr )
+        if ( ierr == 0 ) then
+            close( lu, status = 'delete', iostat = ierr )
+        endif
+    endif
+
+    ok = .not. cgi_session_is_issued( id )
+
+end subroutine cgi_revoke_session
+
+! cgi_session_is_issued --
+!     Check that a session ID is well-formed and was issued by this server
+! Arguments:
+!     id            Session ID to check
+!
+logical function cgi_session_is_issued( id )
+    character(len=*), intent(in) :: id
+
+    cgi_session_is_issued = .false.
+
+    if ( len_trim(session_dir) == 0 ) then
+        return
+    endif
+    if ( len_trim(id) /= SESSION_ID_LENGTH ) then
+        return
+    endif
+    if ( verify( id(1:SESSION_ID_LENGTH), hex_digits ) /= 0 ) then
+        return
+    endif
+
+    inquire( file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
+        exist = cgi_session_is_issued )
+
+end function cgi_session_is_issued
+
+! cgi_random_session_id --
+!     Generate a hex-encoded 128-bit session ID from /dev/urandom
+! Arguments:
+!     id            Generated ID
+!     ok            Whether the random bytes could be read
+!
+subroutine cgi_random_session_id( id, ok )
+    character(len=SESSION_ID_LENGTH), intent(out) :: id
+    logical, intent(out)                          :: ok
+
+    character(len=SESSION_ID_BYTES) :: bytes
+    integer                         :: lu
+    integer                         :: ierr
+    integer                         :: i
+    integer                         :: b
+
+    id = ' '
+    ok = .false.
+
+    lu = cgi_free_unit()
+    if ( lu < 0 ) then
+        return
+    endif
+    open( lu, file = '/dev/urandom', access = 'stream', form = 'unformatted', &
+        action = 'read', status = 'old', iostat = ierr )
+    if ( ierr /= 0 ) then
+        return
+    endif
+    read( lu, iostat = ierr ) bytes
+    close( lu )
+    if ( ierr /= 0 ) then
+        return
+    endif
+
+    do i = 1,SESSION_ID_BYTES
+        b = iand( ichar(bytes(i:i)), 255 )
+        id(2*i-1:2*i-1) = hex_digits(b/16+1:b/16+1)
+        id(2*i:2*i)     = hex_digits(mod(b,16)+1:mod(b,16)+1)
+    enddo
+    ok = .true.
+
+end subroutine cgi_random_session_id
+
+! cgi_free_unit --
+!     Return an unused LU-number between 10 and 99, or -1
+!
+integer function cgi_free_unit()
+
+    integer :: lu
+    logical :: opend
+
+    cgi_free_unit = -1
+    do lu = 10,99
+        inquire( lu, opened = opend )
+        if ( .not. opend ) then
+            cgi_free_unit = lu
+            exit
+        endif
+    enddo
+
+end function cgi_free_unit
 
 ! cgi_get_* --
 !     Get the value of variables
