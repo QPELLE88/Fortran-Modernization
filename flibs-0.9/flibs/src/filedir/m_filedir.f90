@@ -200,14 +200,14 @@ module m_filedir
 #endif
   use m_platform, only : &
        platform_get_platform, &
-       platform_system, &
        PLATFORM_PLATFORM_WINDOWS, &
        PLATFORM_PLATFORM_UNIX, &
        PLATFORM_PLATFORM_MAC, &
        PLATFORM_PLATFORM_NB, &
        platform_get_environment_variable , &
-       platform_cd, &
        platform_stat
+  use, intrinsic :: iso_c_binding, only : c_int, c_char, c_ptr, c_size_t, &
+       c_null_char, c_associated, c_f_pointer
   implicit none
   private
   public :: filedir_add_extension
@@ -255,17 +255,6 @@ module m_filedir
   integer, parameter, public :: MAX_COMMAND_LENGTH = 1000
   character (len=1), parameter :: PLATFORM_SEPARATOR_UNKNOWN = "?"
   character (len=1), save :: PLATFORM_SEPARATOR = PLATFORM_SEPARATOR_UNKNOWN
-  !
-  ! Static, Platform-specific commands
-  !
-  character(len=20), save :: command_ls
-  character(len=20), save :: command_copy
-  character(len=20), save :: command_mkdir
-  character(len=20), save :: command_redirect
-  character(len=20), save :: command_suppress_msg
-  character(len=20), save :: command_touch
-  character(len=20), save :: command_rmdir
-  character(len=20), save :: command_rmdir_force
   ! Set to .true. if the static attributes have allready been initialized
   logical :: filedir_static_initialized = .false.
   !
@@ -290,6 +279,63 @@ module m_filedir
   !
   ! Set to true to stop whenever an error comes in the vstring component.
   logical, save :: filedir_stoponerror = .true.
+  !
+  ! File-system services of the C library (see filedir_posix.c).
+  ! File names are passed as data : no shell command is ever built from them.
+  !
+  interface
+     function filedir_c_mkdir ( path ) bind ( C , name = "flibs_filedir_mkdir" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_mkdir
+     end function filedir_c_mkdir
+     function filedir_c_rmdir ( path ) bind ( C , name = "flibs_filedir_rmdir" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_rmdir
+     end function filedir_c_rmdir
+     function filedir_c_remove_tree ( path ) bind ( C , name = "flibs_filedir_remove_tree" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_remove_tree
+     end function filedir_c_remove_tree
+     function filedir_c_touch ( path ) bind ( C , name = "flibs_filedir_touch" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_touch
+     end function filedir_c_touch
+     function filedir_c_copy_file ( src , dst ) bind ( C , name = "flibs_filedir_copy_file" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: src, dst
+       integer(c_int) :: filedir_c_copy_file
+     end function filedir_c_copy_file
+     function filedir_c_glob_open ( pattern , count ) bind ( C , name = "flibs_filedir_glob_open" )
+       import :: c_ptr, c_char, c_size_t
+       character(kind=c_char), dimension(*), intent(in) :: pattern
+       integer(c_size_t), intent(out) :: count
+       type(c_ptr) :: filedir_c_glob_open
+     end function filedir_c_glob_open
+     function filedir_c_glob_path ( glob , i ) bind ( C , name = "flibs_filedir_glob_path" )
+       import :: c_ptr, c_size_t
+       type(c_ptr), value :: glob
+       integer(c_size_t), value :: i
+       type(c_ptr) :: filedir_c_glob_path
+     end function filedir_c_glob_path
+     subroutine filedir_c_glob_close ( glob ) bind ( C , name = "flibs_filedir_glob_close" )
+       import :: c_ptr
+       type(c_ptr), value :: glob
+     end subroutine filedir_c_glob_close
+     function filedir_c_isdir ( path ) bind ( C , name = "flibs_filedir_isdir" )
+       import :: c_int, c_char
+       character(kind=c_char), dimension(*), intent(in) :: path
+       integer(c_int) :: filedir_c_isdir
+     end function filedir_c_isdir
+     function filedir_c_strlen ( s ) bind ( C , name = "strlen" )
+       import :: c_ptr, c_size_t
+       type(c_ptr), value :: s
+       integer(c_size_t) :: filedir_c_strlen
+     end function filedir_c_strlen
+  end interface
 contains
   !
   ! filedir_init --
@@ -320,33 +366,6 @@ contains
           call filedir_error ( "filedir_init" , message )
        end select
        !
-       ! 2. Initialize the platform-specific commands
-       !
-       select case ( platform )
-       case ( PLATFORM_PLATFORM_WINDOWS )
-          ! See http://en.wikipedia.org/wiki/List_of_DOS_commands
-          command_ls = "dir /b"
-          command_copy = "copy"
-          command_mkdir = "mkdir"
-          command_redirect = ">"
-          command_suppress_msg = "2>nul"
-          command_touch = ""
-          command_rmdir = "rd"
-          command_rmdir_force = "rmdir /s /q"
-       case ( PLATFORM_PLATFORM_UNIX )
-          ! See http://en.wikipedia.org/wiki/List_of_Unix_programs
-          command_ls = "ls"
-          command_copy = "cp"
-          command_mkdir = "md"
-          command_redirect = ">"
-          command_suppress_msg = "2>/dev/null"
-          command_touch = "touch"
-          command_rmdir = "rm"
-          command_rmdir_force = "rm -r -f"
-       case default
-          write(message,*) "Unknown commands for platform :", platform
-          call filedir_error ( "filedir_init" , message )
-       end select
        !
        ! Update the static flag
        !
@@ -558,21 +577,21 @@ contains
   end subroutine filedir_rename
   !
   ! filedir_copy --
-  !   Copy the file ofdln to newfn by using the SYSTEM fortran extension.
+  !   Copy the file sourcefn into targetfn, without running a shell command.
+  !   If targetfn is a directory, the file is copied into it.
+  !   Copying a file onto itself fails and leaves it unchanged.
   ! Arguments:
   !   sourcefn : the source file name
   !   targetfn : the target file name
   !   status, optional : if supplied, it contains 0 on success or nonzero error code
   !      upon return
-  ! Note :
-  !    This subroutine is system-dependent.
   !
   subroutine filedir_copy ( sourcefn , targetfn , status )
     character(len=*), intent(in) :: sourcefn, targetfn
     integer, intent(out) , optional :: status
     integer :: local_status
-    character (len=len(sourcefn)+len(targetfn)+len(command_copy) + 2) :: command
     character ( len = len(sourcefn)+len(targetfn)+22) :: message
+    character ( len = len(sourcefn)+len(targetfn)+1 ) :: targetpath
     logical :: fexist
     !
     ! Check source file.
@@ -590,8 +609,12 @@ contains
     !
     ! Make the copy
     !
-    write ( command , *) trim(command_copy) , " ",  trim(sourcefn), " ", trim(targetfn)
-    call platform_system ( command , local_status )
+    if ( filedir_isdirectory ( targetfn ) ) then
+       targetpath = filedir_join ( targetfn , filedir_tail ( sourcefn ) )
+    else
+       targetpath = targetfn
+    endif
+    local_status = filedir_c_copy_file ( filedir_cstring ( sourcefn ) , filedir_cstring ( targetpath ) )
     if ( present ( status ) ) then
        status = local_status
     elseif ( local_status /=0 ) then
@@ -763,8 +786,6 @@ contains
     integer :: file_unit
     character(len=len(filename)+23) :: message
     logical :: isdir
-    ! TODO : this length is ugly, introduce real dynamic strings in fortran 90 OO
-    character ( len = len(filename)+len(command_rmdir)+len(command_rmdir_force)+ 1) :: command
     isdir = filedir_isdirectory ( filename )
     if (.NOT.isdir) then
        ! Delete that regular file
@@ -781,12 +802,13 @@ contains
        !
        ! Delete that directory
        !
+       ! Symbolic links inside the tree are removed, never followed.
+       !
        if (force) then
-          write ( command , * ) trim(command_rmdir_force) , " ", trim(filename)
+          local_status = filedir_c_remove_tree ( filedir_cstring ( filename ) )
        else
-          write ( command , * ) trim(command_rmdir) , " ", trim(filename)
+          local_status = filedir_c_rmdir ( filedir_cstring ( filename ) )
        endif
-       call platform_system ( command , local_status )
        isdir = filedir_isdirectory ( filename )
        if (isdir) then
           local_status = -1
@@ -899,6 +921,10 @@ contains
   !
   ! Arguments:
   !   pattern         Pattern for the file names (like: *.f90)
+  !                   Wildcards (*, ?, [...]) are expanded in every path component,
+  !                   as the shell does (glob(3)), but no shell is run.
+  !                   Escape a literal wildcard character with a backslash,
+  !                   for example "logs\[1\]/*.txt". "." and ".." are never returned.
   !   list            Allocated list of file names (returned)
   !
   ! Note:
@@ -916,95 +942,28 @@ contains
     integer, intent(out)                    :: numberOfFiles
     ! listOfFiles ( : , ifile) is the file #ifile
     ! listOfFiles ( ichar , ifile ) is the character #ichar for file #ifile
-    character, dimension(:,:), pointer :: listOfFiles ! -> does not work
-    !!$    !character(len=*), dimension(:), pointer :: listOfFiles ! -> does not work
-    !!$    ! NOTE :
-    !!$    ! When I test it against Intel Fortran 8 or gfortran 4.0.2, the
-    !!$    ! program freezes. I have to change the declaration of the list of files to :
-    !!$    !character(len=50), dimension(1:50) :: listOfFiles -> works fine.
-    !!$    !character(len=*), dimension(1:50) :: listOfFiles -> does not work
-    !!$
-    character(len=200)                      :: tmpfile
-    character(len=200)                      :: cmd
-    character(len=1)                        :: line_unused
-    integer                                 :: luntmp
-    integer                                 :: i
-    integer                                 :: ierr
-    integer :: platform
-    character (len=200) :: tempdir
-    character(len=200)             :: prefix
+    character, dimension(:,:), pointer :: listOfFiles
+    character(len=:), allocatable :: path
+    type(c_ptr) :: globhandle
+    integer(c_size_t) :: count
     integer :: ifile
-    character (len=filelength) :: current_filename
-    character (len=filelength) :: full_filename
     integer :: icharacter
-    ! NOTE :
-    ! I would like to use this declaration instead, but this does not work ????
-    !character(len=len(pattern))             :: prefix
     !
-    ! 1. Compute the list of files and redirect it to a temporary file.
+    ! The pattern is expanded by glob(3), as the shell would do,
+    ! but no shell runs : the matches are only file names.
+    ! The matches are sorted, as ls does.
     !
-    call filedir_tempdir ( tempdir )
-    ! TODO  : create a subroutine which returns the path to a temporary file.
-    tmpfile = filedir_join ( tempdir , "__filelist__" )
-    !
-    ! Compute the platform-specific ls command
-    !
-    ! Only file names!
-    ! Get the current platform
-    platform = platform_get_platform ()
-    cmd = trim(command_ls) // ' ' // trim(pattern) // ' ' // trim(command_redirect) // trim(tmpfile) &
-         // ' ' // command_suppress_msg
-    ! TODO : understand when the command has to be fixed up with "file_correct_separator"
-    !cmd = filedir_normalize ( cmd )
-    !
-    ! Under windows, we only get the file tails.
-    ! So we have to normalize these files tails to get the full file names.
-    !
-    if (platform == PLATFORM_PLATFORM_WINDOWS) then
-       prefix = pattern
-       prefix = filedir_normalize ( prefix )
-       i = filedir_last_separator_index ( prefix )
-       prefix(i:) = ' '
-    endif
-    call platform_system ( cmd )
-    !
-    ! 2. Analyse the content of the temporary file.
-    !
-    luntmp = filedir_get_unit ( )
-    open( luntmp , file = tmpfile )
-    !
-    ! 2.1 Count the number of files, the maximum length of all files
-    !
-    numberOfFiles = 0
-    do
-       read( luntmp, '(a)', iostat = ierr ) line_unused
-       if ( ierr == 0 ) then
-          numberOfFiles = numberOfFiles + 1
-       else
-          exit
-       endif
-    enddo
-    rewind( luntmp )
-    !
-    ! 2.2 Fill the array
-    !
+    globhandle = filedir_c_glob_open ( filedir_cstring ( pattern ) , count )
+    numberOfFiles = int ( count )
     allocate( listOfFiles(1:filelength , 1:numberOfFiles ) )
+    listOfFiles = " "
     do ifile = 1 , numberOfFiles
-       !read( luntmp, '(a)' ) listOfFiles(ifile,:)
-       read( luntmp, '(a)' ) current_filename
-       if (platform == PLATFORM_PLATFORM_WINDOWS) then
-          full_filename = filedir_join ( prefix , current_filename )
-       else
-          full_filename = current_filename
-       endif
-       do icharacter = 1 , filelength
-          listOfFiles ( icharacter , ifile ) = full_filename ( icharacter : icharacter )
+       call filedir_fstring ( filedir_c_glob_path ( globhandle , int ( ifile - 1 , c_size_t ) ) , path )
+       do icharacter = 1 , min ( filelength , len ( path ) )
+          listOfFiles ( icharacter , ifile ) = path ( icharacter : icharacter )
        enddo
     enddo
-    !
-    ! 3. Delete the temporary file
-    !
-    close( luntmp, status = 'delete' )
+    call filedir_c_glob_close ( globhandle )
   end subroutine filedir_findByPattern
   !
   ! filedir_tempdir --
@@ -1306,15 +1265,13 @@ contains
     integer, intent(out) , optional :: status
     integer :: local_status
     integer :: platform
-    character (len= len(filename) + len(command_touch) + 1) :: command
     character (len=200) :: message
     platform = platform_get_platform ()
     select case ( platform )
     case ( PLATFORM_PLATFORM_WINDOWS )
        call filedir_touch_windows ( filename , local_status )
     case ( PLATFORM_PLATFORM_UNIX )
-       write ( command , *) trim(command_touch), " ", trim(filename)
-       call platform_system ( command , local_status )
+       local_status = filedir_c_touch ( filedir_cstring ( filename ) )
     case default
        write(message,*) "Unknown touch command for platform :", platform
        call filedir_error ( "filedir_touch" , message )
@@ -1370,17 +1327,7 @@ contains
   !
   logical function filedir_isdirectory ( dirname )
     character(len=*), intent(in) :: dirname
-    ! TODO : What if the current working directory is longer that the given directory name ?
-    character ( len=len(dirname)) :: cwd
-    integer :: status
-    call filedir_pwd ( cwd )
-    call platform_cd ( dirname , status )
-    if ( status == 0 ) then
-       filedir_isdirectory = .true.
-    else
-       filedir_isdirectory = .false.
-    endif
-    call platform_cd ( cwd )
+    filedir_isdirectory = filedir_c_isdir ( filedir_cstring ( dirname ) ) /= 0
   end function filedir_isdirectory
   !
   ! filedir_pathtype --
@@ -1441,15 +1388,13 @@ contains
     character(len=*), intent(in) :: dirname
     integer, intent(out) , optional :: status
     integer :: local_status
-    character (len=len(dirname)+len(command_mkdir) + 2) :: command
     character(len=len(dirname)+26) :: message
     logical :: isdir
     isdir = filedir_isdirectory ( dirname )
     if (isdir) then
        local_status = -1
     else
-       write ( command , *) trim(command_mkdir) , " ",  trim(dirname)
-       call platform_system ( command , local_status )
+       local_status = filedir_c_mkdir ( filedir_cstring ( dirname ) )
     endif
     if ( present ( status ) ) then
        status = local_status
@@ -1706,6 +1651,32 @@ contains
   ! Arguments :
   !   origin : the name of the subroutine/function which generated the error.
   !   message : the message to display
+  !
+  ! filedir_cstring --
+  !   Returns the trimmed string as a null-terminated C string.
+  !
+  function filedir_cstring ( string ) result ( cstring )
+    character(len=*), intent(in) :: string
+    character(kind=c_char, len=:), allocatable :: cstring
+    cstring = trim ( string ) // c_null_char
+  end function filedir_cstring
+  !
+  ! filedir_fstring --
+  !   Copy a NUL-terminated C string into a Fortran string.
+  !
+  subroutine filedir_fstring ( cstring , string )
+    type(c_ptr), intent(in) :: cstring
+    character(len=:), allocatable, intent(out) :: string
+    character(kind=c_char), dimension(:), pointer :: chars
+    integer :: n
+    integer :: i
+    n = int ( filedir_c_strlen ( cstring ) )
+    call c_f_pointer ( cstring , chars , [ n ] )
+    allocate ( character(len=n) :: string )
+    do i = 1 , n
+       string ( i : i ) = chars ( i )
+    enddo
+  end subroutine filedir_fstring
   !
   subroutine filedir_error ( origin , message )
     character(len=*), intent(in) :: origin
