@@ -260,10 +260,12 @@ integer function dict_hashkey( key )
 
     dict_hashkey = 0
 
+    ! Reduce at every step: avoids signed overflow and keeps the
+    ! result in 1..hash_size, also for a zero-length key
     do i = 1,len(key)
-        dict_hashkey = multiplier * dict_hashkey + ichar(key(i:i))
+        dict_hashkey = modulo( multiplier * dict_hashkey + ichar(key(i:i)), hash_size )
     enddo
 
-    dict_hashkey = 1 + mod( dict_hashkey-1, hash_size )
+    dict_hashkey = 1 + dict_hashkey
 end function dict_hashkey
 
