@@ -287,10 +287,13 @@ subroutine cgi_store_dict( dict, string )
             data%value = buffer(keq+1:k-1)
             call cgi_decode_string( data%value )
 
-            if ( .not. associated( dict ) ) then
-                call dict_create( dict, key, data )
-            else
-                call dict_add_key( dict, key, data )
+            ! Parameters without a name (e.g. "=1" or "%20=1") are ignored
+            if ( key /= ' ' ) then
+                if ( .not. associated( dict ) ) then
+                    call dict_create( dict, key, data )
+                else
+                    call dict_add_key( dict, key, data )
+                endif
             endif
         endif
 
