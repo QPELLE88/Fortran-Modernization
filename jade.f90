@@ -35,8 +35,16 @@ module jade
     character(len=80), dimension (0:30) :: tagLevels
     character(len=3)   :: AFORMAT = '(a)'
 
-    open(newunit=templater, file=templatefile)
+    open(newunit=templater, file=templatefile, status='old', action='read', iostat=io)
     templatefile = ''
+    if (io /= 0) then
+      if (unitNo == 0) then
+        templatefile = '<p>Template unavailable.</p>'
+      else
+        write(unitNo, AFORMAT) '<p>Template unavailable.</p>'
+      endif
+      return
+    endif
     lastSpaceCount = -1
     lastIndent = 0
     do

@@ -911,6 +911,8 @@ subroutine sqlite3_prepare( db, command, stmt, columns )
          call stringtof( columns(i)%name )
          call stringtof( columns(i)%type )
 
+         ! Expression columns have no declared type: read them as text
+         columns(i)%type_set = SQLITE_CHAR
          select case (columns(i)%type(1:4) )
          case( 'INT ', 'INTE' )
             columns(i)%type_set = SQLITE_INT
