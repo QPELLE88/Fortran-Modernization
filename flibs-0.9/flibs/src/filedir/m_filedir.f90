@@ -921,6 +921,10 @@ contains
   !
   ! Arguments:
   !   pattern         Pattern for the file names (like: *.f90)
+  !                   Wildcards (*, ?, [...]) are expanded in every path component,
+  !                   as the shell does (glob(3)), but no shell is run.
+  !                   Escape a literal wildcard character with a backslash,
+  !                   for example "logs\[1\]/*.txt". "." and ".." are never returned.
   !   list            Allocated list of file names (returned)
   !
   ! Note:

@@ -22,30 +22,54 @@
 #define O_NOCTTY 0
 #endif
 
+struct flibs_glob {
+    glob_t g;
+    size_t *keep;
+    size_t n;
+};
+
+static int is_dot_entry(const char *path)
+{
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    return strcmp(base, ".") == 0 || strcmp(base, "..") == 0;
+}
+
 /* Expand a wildcard pattern like the shell does, without running a shell.
-   Returns a handle (NULL if none) and the number of sorted matches. */
+   Returns a handle (NULL if none) and the number of sorted matches;
+   "." and ".." entries are skipped. */
 void *flibs_filedir_glob_open(const char *pattern, size_t *count)
 {
-    glob_t *g = calloc(1, sizeof *g);
+    struct flibs_glob *h = calloc(1, sizeof *h);
     *count = 0;
-    if (g == NULL)
+    if (h == NULL)
         return NULL;
-    if (glob(pattern, 0, NULL, g) == 0)
-        *count = g->gl_pathc;
-    return g;
+    if (glob(pattern, 0, NULL, &h->g) != 0)
+        return h;
+    h->keep = malloc((h->g.gl_pathc ? h->g.gl_pathc : 1) * sizeof *h->keep);
+    if (h->keep == NULL)
+        return h;
+    for (size_t i = 0; i < h->g.gl_pathc; i++)
+        if (!is_dot_entry(h->g.gl_pathv[i]))
+            h->keep[h->n++] = i;
+    *count = h->n;
+    return h;
 }
 
-const char *flibs_filedir_glob_path(void *g, size_t i)
+const char *flibs_filedir_glob_path(void *handle, size_t i)
 {
-    return ((glob_t *)g)->gl_pathv[i];
+    struct flibs_glob *h = handle;
+    return h->g.gl_pathv[h->keep[i]];
 }
 
-void flibs_filedir_glob_close(void *g)
+void flibs_filedir_glob_close(void *handle)
 {
-    if (g == NULL)
+    struct flibs_glob *h = handle;
+    if (h == NULL)
         return;
-    globfree((glob_t *)g);
-    free(g);
+    globfree(&h->g);
+    free(h->keep);
+    free(h);
 }
 
 /* Return 1 if path is a directory (following symbolic links), 0 otherwise. */

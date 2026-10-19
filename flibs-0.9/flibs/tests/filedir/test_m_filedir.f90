@@ -761,6 +761,17 @@ contains
     call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
     call assert ( numberOfFiles == 1 , "Error in shell safety : findByPattern directory wildcard")
     deallocate ( listOfFiles )
+    call filedir_touch ( filedir_join ( workdir , ".hidden" ) , status )
+    pattern = filedir_join ( workdir , ".*" )
+    call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
+    call assert ( numberOfFiles == 1 , "Error in shell safety : findByPattern skips . and ..")
+    deallocate ( listOfFiles )
+    call filedir_mkdir ( filedir_join ( workdir , "l[1]" ) , status )
+    call filedir_touch ( filedir_join ( filedir_join ( workdir , "l[1]" ) , "x.txt" ) , status )
+    pattern = filedir_join ( filedir_join ( workdir , "l\[1\]" ) , "*.txt" )
+    call filedir_findByPattern ( pattern , filelength , numberOfFiles , listOfFiles )
+    call assert ( numberOfFiles == 1 , "Error in shell safety : findByPattern escaped wildcard")
+    deallocate ( listOfFiles )
     !
     ! touch an existing read-only file and a directory
     !
