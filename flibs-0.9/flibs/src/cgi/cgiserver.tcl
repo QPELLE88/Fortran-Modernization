@@ -21,10 +21,18 @@
 #
 #     TODO: use cgi-bin/* instead of the extension
 #
+#     Security:
+#     - URLs are percent-decoded and must resolve (symbolic links
+#       included) to a regular file below the root directory, otherwise
+#       the request is refused with 403. ".." segments are refused.
+#     - There is no authentication: by default the server only listens
+#       on 127.0.0.1. Do not expose it to other hosts.
+#
 #     The configuration file can specify:
 #     - root      The root directory of the application (default: startup directory)
 #     - default   The start-up page (default: index.html)
-#     - port      Port to be used (default: 80)
+#     - port      Port to be used (default: 8015)
+#     - address   Address to listen on (default: 127.0.0.1)
 #     - encoding  The encoding of the data sent to the client (default: iso8859-1)
 #
 #     What configuration file:
@@ -80,6 +88,7 @@ set root      [pwd]
 set default   index.html
 set port      8015
 set encoding  iso8859-1
+set address   127.0.0.1
 
 # bgerror --
 #     Handle background errors (echo to the screen and to the client)
@@ -110,6 +119,95 @@ proc bgerror msg {
 #
 proc answer {socketChannel host2 port2} {
   fileevent $socketChannel readable [list serve $socketChannel]
+}
+
+# percentDecode --
+#     Decode the %XX escapes (UTF-8) in the path of a URL
+# Arguments:
+#     text      Encoded text
+# Result:
+#     Decoded text
+#
+proc percentDecode {text} {
+    set bytes ""
+    set start 0
+    foreach {match hex} [regexp -all -inline -indices {%([0-9A-Fa-f]{2})} $text] {
+        append bytes [encoding convertto utf-8 \
+            [string range $text $start [expr {[lindex $match 0]-1}]]]
+        append bytes [binary format H2 [string range $text {*}$hex]]
+        set start [expr {[lindex $match 1]+1}]
+    }
+    append bytes [encoding convertto utf-8 [string range $text $start end]]
+    return [encoding convertfrom utf-8 $bytes]
+}
+
+# realPath --
+#     Absolute path with symbolic links resolved in every component
+#     (file normalize leaves the last component alone)
+# Arguments:
+#     path      Path to resolve
+# Result:
+#     Resolved path
+#
+proc realPath {path} {
+    file dirname [file normalize [file join $path __dummy__]]
+}
+
+# resolveUrlPath --
+#     Map the path of a URL onto a file below the root directory
+# Arguments:
+#     tail      Path part of the URL (starts with /)
+# Result:
+#     Resolved file name, or "" if the path is not allowed
+#
+proc resolveUrlPath {tail} {
+    set path [percentDecode $tail]
+    if {[string match */ $path]} {
+        append path $::default
+    }
+    if {[regexp {[\x00-\x1f\x7f\\:]} $path]} {
+        return ""
+    }
+
+    set parts {}
+    foreach part [split $path /] {
+        if {$part eq "" || $part eq "."} {
+            continue
+        }
+        if {$part eq ".." || [string match ~* $part]} {
+            return ""
+        }
+        lappend parts $part
+    }
+    if {[llength $parts] == 0} {
+        return ""
+    }
+
+    set root  [file split [realPath $::root]]
+    set name  [realPath [file join {*}$root {*}$parts]]
+    set split [file split $name]
+    set n     [llength $root]
+    if {[llength $split] <= $n || [lrange $split 0 [expr {$n-1}]] ne $root} {
+        return ""
+    }
+    return $name
+}
+
+# forbidden --
+#     Refuse the request
+# Arguments:
+#     sock      Channel for the socket
+# Result:
+#     None
+#
+proc forbidden {sock} {
+    puts $sock "HTTP/1.0 403 Forbidden"
+    puts $sock "Content-Type: text/html;charset=$::encoding\n"
+    puts $sock "<html><head><title>Forbidden</title></head>"
+    puts $sock "<body><center>"
+    puts $sock "Access to the URL you requested is not allowed."
+    puts $sock "</center></body></html>"
+    close $sock
 }
 
 # serve --
@@ -146,9 +244,13 @@ proc serve sock {
     fileevent $sock readable ""
     set tail /
     regexp {(/[^ ?]*)(\?[^ ]*)?} $line -> tail args
-    if {[string match */ $tail]} {append tail $::default}
-    set name [string map {%20 " "} $::root$tail]
+    set name [resolveUrlPath $tail]
     set args [string range $args 1 end]
+    if {$name eq ""} {
+        puts "URL $tail refused"
+        forbidden $sock
+        return
+    }
 
     #
     # The URL must be an existing file:
@@ -159,7 +261,7 @@ proc serve sock {
     #
     set exe 0
     set perm r
-    if {[file readable $name]} {
+    if {[file isfile $name] && [file readable $name]} {
         puts $sock "HTTP/1.0 200 OK"
         if {[file extension $name] eq ".tcl"} {
             set ::env(QUERY_STRING) [string range $args 1 end]
@@ -266,8 +368,8 @@ if { $cfg >= 0 } {
 }
 
 if { [file readable $cfgfile] } {
-    puts "Using configuration file $cgfile"
-    source $cgifile
+    puts "Using configuration file $cfgfile"
+    source $cfgfile
 }   else {
     puts "Using default configuration"
 }
@@ -279,7 +381,7 @@ if { ! [file readable [file join $root $default]] } {
     puts "Error: could not find startup file/URL -  [file join $root $default]"
     puts "Stopping server"
 } else {
-    socket -server answer $port
+    socket -server answer -myaddr $address $port
     puts "Server ready..."
     vwait forever
 }
