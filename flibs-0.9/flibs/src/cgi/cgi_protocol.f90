@@ -597,7 +597,7 @@ subroutine cgi_revoke_session( id )
     open( lu, file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
         status = 'old', iostat = ierr )
     if ( ierr == 0 ) then
-        close( lu, status = 'delete' )
+        close( lu, status = 'delete', iostat = ierr )
     endif
 
 end subroutine cgi_revoke_session
