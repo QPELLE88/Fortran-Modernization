@@ -105,9 +105,10 @@ contains
 !    column        Column information
 !    primary       Name of the primary key
 !
-character(len=40) function typename( column, primary )
+function typename( column, primary )
    type(SQLITE_COLUMN), intent(in) :: column
    character(len=*), intent(in)    :: primary
+   character(len=len(column%type)+len(' primary key')) :: typename
 
    if ( column%name .ne. primary ) then
       typename = column%type
@@ -125,8 +126,9 @@ end function typename
 ! Arguments:
 !    column        Column information
 !
-character(len=80) function column_func( column )
+function column_func( column )
    type(SQLITE_COLUMN), intent(in) :: column
+   character(len=len(column%function)+len(column%name)+2) :: column_func
 
    if ( column%function .ne. ' ' ) then
       column_func = trim(column%function) // '(' // trim(column%name) // ')'
