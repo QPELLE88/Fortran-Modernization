@@ -132,10 +132,36 @@ by the contents of the variable msg.
 [list_end]
 
 
+[call [cmd "call cgi_session_directory( dir )"]]
+Set the directory in which issued session IDs are recorded (one empty
+file per ID, named after the ID). It must exist and be readable and
+writable only by the CGI application (e.g. mode 0700), since anyone who
+can list it can read every issued ID. A name longer than 200 characters
+disables sessions.
+Until it is set, [term cgi_get_session] issues no session IDs.
+[list_begin arg]
+[arg_def "character(len=*), intent(in)" dir]
+Name of the session directory
+[list_end]
+
+
 [call [cmd "call cgi_get_session( dict, value )"]]
-Get the value of the "sessionid" variable. This variable is
-already present in the form or it is set by this routine to a (more or
-less) unique value.
+Get the value of the "sessionid" variable. A value present in the form
+is only accepted if this server issued it: a 32-character lowercase hex
+string with a matching file in the session directory. Otherwise a new
+ID is issued: 128 random bits read from /dev/urandom, hex-encoded and
+recorded in the session directory.
+[nl]
+If no session directory is set, /dev/urandom cannot be read, the ID
+cannot be recorded, or [term value] is shorter than 32 characters,
+[term value] is set to blanks, and any "sessionid" in the dictionary that
+this server did not issue is blanked.
+[nl]
+Limits: this helper only issues and recognises IDs. It does not expire
+them, bind them to a user, or authenticate anyone, and an issued ID can
+be planted in a victim's form (session fixation). Do not rely on it for
+authentication on its own; call [term cgi_new_session] after any change
+of privilege, such as a login.
 [nl]
 To use it as a session identifier (if your application requires a
 continued conversation with the user), make sure each subsequent HTML
@@ -146,7 +172,20 @@ reply contains a line like:
 
 [list_begin arg]
 [arg_def "character(len=*), intent(out)" value]
-The unique session ID
+The unique session ID (at least 32 characters)
+[list_end]
+
+
+[call [cmd "call cgi_new_session( dict, value )"]]
+Always issue a new session ID (as described for [term cgi_get_session])
+and store it as "sessionid" in the dictionary. An issued ID already
+stored there is revoked (its file is removed), even if no new ID can be
+issued, so it is no longer accepted.
+[list_begin arg]
+[arg_def "type(DICT_STRUCT), pointer" dict]
+Dictionary with values
+[arg_def "character(len=*), intent(out)" value]
+The new session ID (at least 32 characters)
 [list_end]
 
 
