@@ -90,11 +90,12 @@ subroutine list_destroy( list )
     type(LINKED_LIST), pointer  :: next
 
     current => list
-    do while ( associated(current%next) )
+    do while ( associated(current) )
         next => current%next
         deallocate( current )
         current => next
     enddo
+    list => null()
 end subroutine list_destroy
 
 ! list_count --
