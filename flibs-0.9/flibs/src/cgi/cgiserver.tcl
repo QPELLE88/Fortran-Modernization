@@ -57,6 +57,8 @@
 #       "cgiready", requests for programs are queued and handled
 #       strictly one at a time. A program that does not finish within
 #       "exeTimeout" seconds is killed so that it cannot block the queue.
+#       After creating "cgiready" a program has "exeGrace" milliseconds
+#       to exit (so that its output is flushed) before it is killed.
 #     - No checking of the incoming connections, you can do this
 #       however by redefining the "answer" procedure in the
 #       configuration file
@@ -168,8 +170,6 @@ proc serve sock {
             set name [list |tclsh $name]
         } elseif {[file extension $name] eq ".exe"} {
             set exe  1
-            set perm w+
-            set name [list |$name]
         } else {
            puts $sock "Content-Type: text/html;charset=$::encoding\n"
         }
@@ -212,11 +212,13 @@ proc done {file sock bytes {msg {}}} {
 # is set while one of them is being handled. The protocol uses the
 # fixed files "cgiout" and "cgiready", so only one program request
 # may be in progress at any time. exeTimeout is the maximum time (in
-# seconds) a program may take before it is killed.
+# seconds) a program may take before it is killed, exeGrace the time
+# (in milliseconds) it may take to exit after creating "cgiready".
 #
 set exeQueue   {}
 set exeBusy    0
 set exeTimeout 60
+set exeGrace   5000
 
 # queueProgram --
 #     Register a request for a program and start it if none is running
@@ -258,7 +260,7 @@ proc runNextProgram {} {
 #     the request data
 # Arguments:
 #     sock         Channel for the socket
-#     name         Command to open as a pipe
+#     path         Full path of the program
 #     httpdata     HTTP data sent by the client
 # Result:
 #     None
@@ -267,53 +269,67 @@ proc runNextProgram {} {
 #     (via setsid), so that stopProgram can also kill any processes
 #     it started
 #
-proc startProgram {sock name httpdata} {
+proc startProgram {sock path httpdata} {
     file delete -force cgiout
     file delete -force cgiready
 
+    set command [list $path]
     if { $::tcl_platform(platform) eq "unix" && [auto_execok setsid] ne "" } {
-        set name [list |setsid [string range [lindex $name 0] 1 end]]
+        set command [list setsid $path]
     }
 
-    puts "Executing program $name ..."
-    set inchan [open $name w+]
+    puts "Executing program $path ..."
+    set inchan [open "|$command" w+]
     if { [catch {sendHttpData $inchan $httpdata} msg] } {
         stopProgram $inchan
         error $msg
     }
+    fconfigure $inchan -blocking 0
     set deadline [expr {[clock milliseconds] + 1000 * $::exeTimeout}]
-    waitForProgram $sock $inchan $deadline
+    waitForProgram $sock $inchan $deadline 0
 }
 
 # waitForProgram --
-#     Poll for the file "cgiready" without nesting the event loop, then
-#     send the program's output to its own client
+#     Poll for the file "cgiready" and the end of the program without
+#     nesting the event loop, then send the output to its own client
 # Arguments:
 #     sock         Channel for the socket
 #     inchan       Channel of the program
 #     deadline     Time (in ms) after which the program is abandoned
+#     ready        Time (in ms) after which a program that created
+#                  "cgiready" is killed (0 if not created yet)
 # Result:
 #     None
 # Note:
-#     Once "cgiready" exists, "cgiout" is opened, the program (and its
-#     process group) is killed and both files are removed before the
-#     next request is started. The open channel is then streamed to
-#     the client, so neither a slow client nor a lingering process can
+#     Once "cgiready" exists and the program has exited (or exeGrace
+#     has passed), "cgiout" is opened, the program (and its process
+#     group) is killed and both files are removed before the next
+#     request is started. The open channel is then streamed to the
+#     client, so neither a slow client nor a lingering process can
 #     affect another request
 #
-proc waitForProgram {sock inchan deadline} {
+proc waitForProgram {sock inchan deadline ready} {
     set released 0
     if { [catch {
-        if { [file exists cgiready] } {
+        catch {read $inchan}
+        set exited [expr {[catch {eof $inchan} atEnd] || $atEnd}]
+        set now    [clock milliseconds]
+        if { $ready == 0 && [file exists cgiready] } {
+            set ready [expr {$now + $::exeGrace}]
+        }
+
+        if { $ready > 0 && ($exited || $now > $ready) } {
             set outfile [open "cgiout"]
             fconfigure $outfile -translation binary
             stopProgram $inchan
             if { [file exists cgiout] } {
-                # The open file could not be removed (e.g. on Windows)
+                # The open file could not be removed (e.g. on Windows).
+                # If it still cannot be removed, the next request fails
+                # in startProgram rather than seeing this output
                 set data [read $outfile]
                 close $outfile
                 unset outfile
-                file delete -force cgiout
+                catch {file delete -force cgiout}
             }
             set released 1
             releaseProgram
@@ -323,11 +339,14 @@ proc waitForProgram {sock inchan deadline} {
                 fconfigure $sock -translation binary
                 fcopy $outfile $sock -command [list done $outfile $sock]
             }
-        } elseif { [clock milliseconds] > $deadline } {
+        } elseif { $ready == 0 && $exited } {
+            stopProgram $inchan
+            error "program exited without creating cgiready"
+        } elseif { $ready == 0 && $now > $deadline } {
             stopProgram $inchan
             error "program did not finish within $::exeTimeout seconds"
         } else {
-            after 20 [list waitForProgram $sock $inchan $deadline]
+            after 20 [list waitForProgram $sock $inchan $deadline $ready]
         }
     } msg] } {
         if { [info exists outfile] } {
@@ -355,8 +374,12 @@ proc waitForProgram {sock inchan deadline} {
 proc stopProgram {inchan} {
     catch {
         foreach p [pid $inchan] {
-            catch {exec kill -KILL -- -$p}
-            catch {exec kill -KILL $p}
+            if { $::tcl_platform(platform) eq "windows" } {
+                catch {exec taskkill /F /T /PID $p}
+            } else {
+                catch {exec kill -KILL -- -$p}
+                catch {exec kill -KILL $p}
+            }
         }
     }
     catch {
