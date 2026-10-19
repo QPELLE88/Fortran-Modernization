@@ -44,6 +44,7 @@ module cgi_protocol
     character(len=DICT_VALUE_LENGTH), private, save :: session_dir = ' '
 
     private :: cgi_session_is_issued
+    private :: cgi_revoke_session
     private :: cgi_random_session_id
     private :: cgi_free_unit
 
@@ -513,6 +514,7 @@ end subroutine cgi_get_session
 
 ! cgi_new_session --
 !     Issue a new session ID, replacing any "sessionid" in the dictionary
+!     (an issued ID found there is revoked, so it cannot be reused)
 ! Arguments:
 !     dict          Dictionary with values
 !     value         New session ID (blank on failure, see cgi_get_session)
@@ -530,6 +532,8 @@ subroutine cgi_new_session( dict, value )
     value = ' '
     if ( associated(dict) ) then
         if ( dict_has_key( dict, "sessionid" ) ) then
+            data = dict_get_key( dict, "sessionid" )
+            call cgi_revoke_session( data%value )
             data%value = ' '
             call dict_add_key( dict, "sessionid", data )
         endif
@@ -564,6 +568,33 @@ subroutine cgi_new_session( dict, value )
     endif
 
 end subroutine cgi_new_session
+
+! cgi_revoke_session --
+!     Remove the record of an issued session ID, so it is no longer accepted
+! Arguments:
+!     id            Session ID to revoke (ignored if it was not issued)
+!
+subroutine cgi_revoke_session( id )
+    character(len=*), intent(in) :: id
+
+    integer :: lu
+    integer :: ierr
+
+    if ( .not. cgi_session_is_issued( id ) ) then
+        return
+    endif
+
+    lu = cgi_free_unit()
+    if ( lu < 0 ) then
+        return
+    endif
+    open( lu, file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
+        status = 'old', iostat = ierr )
+    if ( ierr == 0 ) then
+        close( lu, status = 'delete' )
+    endif
+
+end subroutine cgi_revoke_session
 
 ! cgi_session_is_issued --
 !     Check that a session ID is well-formed and was issued by this server

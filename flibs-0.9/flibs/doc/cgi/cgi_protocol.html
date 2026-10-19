@@ -236,7 +236,8 @@ The unique session ID (at least 32 characters)
 <dt><b class='cmd'>call cgi_new_session( dict, value )</b><dd>
 
 Always issue a new session ID (as described for <em>cgi_get_session</em>)
-and store it as &quot;sessionid&quot; in the dictionary.
+and store it as &quot;sessionid&quot; in the dictionary. An issued ID already
+stored there is revoked (its file is removed), so it is no longer accepted.
 <br><br>
 <dl>
 <dt>type(DICT_STRUCT), pointer <i class='arg'>dict</i><dd>
