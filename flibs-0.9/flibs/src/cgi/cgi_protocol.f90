@@ -514,7 +514,8 @@ end subroutine cgi_get_session
 
 ! cgi_new_session --
 !     Issue a new session ID, replacing any "sessionid" in the dictionary
-!     (an issued ID found there is revoked, so it cannot be reused)
+!     (an issued ID found there is revoked once the new ID is recorded;
+!     if no new ID can be issued, the old one stays valid)
 ! Arguments:
 !     dict          Dictionary with values
 !     value         New session ID (blank on failure, see cgi_get_session)
@@ -524,16 +525,18 @@ subroutine cgi_new_session( dict, value )
     character(len=*)           :: value
 
     character(len=SESSION_ID_LENGTH) :: id
+    character(len=DICT_VALUE_LENGTH) :: old_id
     type(DICT_DATA)                  :: data
     logical                          :: ok
     integer                          :: lu
     integer                          :: ierr
 
     value = ' '
+    old_id = ' '
     if ( associated(dict) ) then
         if ( dict_has_key( dict, "sessionid" ) ) then
             data = dict_get_key( dict, "sessionid" )
-            call cgi_revoke_session( data%value )
+            old_id = data%value
             data%value = ' '
             call dict_add_key( dict, "sessionid", data )
         endif
@@ -558,6 +561,8 @@ subroutine cgi_new_session( dict, value )
         return
     endif
     close( lu )
+
+    call cgi_revoke_session( old_id )
 
     value = id
     data%value = id

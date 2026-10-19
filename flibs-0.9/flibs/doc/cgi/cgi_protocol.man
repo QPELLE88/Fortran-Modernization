@@ -178,7 +178,8 @@ The unique session ID (at least 32 characters)
 [call [cmd "call cgi_new_session( dict, value )"]]
 Always issue a new session ID (as described for [term cgi_get_session])
 and store it as "sessionid" in the dictionary. An issued ID already
-stored there is revoked (its file is removed), so it is no longer accepted.
+stored there is revoked (its file is removed) once the new ID is recorded,
+so it is no longer accepted; if no new ID can be issued, it stays valid.
 [list_begin arg]
 [arg_def "type(DICT_STRUCT), pointer" dict]
 Dictionary with values
