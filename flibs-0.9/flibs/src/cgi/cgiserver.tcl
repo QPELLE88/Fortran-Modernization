@@ -295,6 +295,9 @@ proc waitForProgram {sock inchan} {
         }
     } msg] } {
         catch {close $inchan}
+        if { [info exists outfile] } {
+            catch {close $outfile}
+        }
         programError $sock $msg
     }
 }
