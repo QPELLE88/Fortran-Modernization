@@ -44,7 +44,13 @@ csqlite.o: $(FLIBS)/sqlite/csqlite.c
 	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
 	cp $(FLIBS)/sqlite/csqlite.o . 
 
-clean:
-	rm -f -v fortran_fcgi *.o *.mod $(FLIBS)/sqlite/*.o
+test_jade: test/test_jade.f90 jade.o string_helpers.o
+	$(FORTRAN) -o $@ $^
 
-.PHONY: clean
+test: test_jade
+	./test_jade
+
+clean:
+	rm -f -v fortran_fcgi test_jade *.o *.mod $(FLIBS)/sqlite/*.o
+
+.PHONY: clean test

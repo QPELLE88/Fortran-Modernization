@@ -76,4 +76,85 @@ module string_helpers
         endif
       enddo
   end subroutine string_replace
+
+  function to_lower(str) result(lower)
+    character(len=*), intent(in) :: str
+    character(len=len(str))      :: lower
+    integer                      :: i, c
+
+    lower = str
+    do i = 1, len(str)
+      c = iachar(str(i:i))
+      if (c >= iachar('A') .and. c <= iachar('Z')) lower(i:i) = achar(c + 32)
+    enddo
+  end function to_lower
+
+  ! escapes & < > " ' for HTML text and quoted attribute values
+  function html_escape(str) result(escaped)
+    character(len=*), intent(in)  :: str
+    character(len=:), allocatable :: escaped
+    integer                       :: i
+
+    escaped = ''
+    do i = 1, len(str)
+      select case (str(i:i))
+        case ('&')
+          escaped = escaped // '&amp;'
+        case ('<')
+          escaped = escaped // '&lt;'
+        case ('>')
+          escaped = escaped // '&gt;'
+        case ('"')
+          escaped = escaped // '&quot;'
+        case ("'")
+          escaped = escaped // '&#39;'
+        case default
+          escaped = escaped // str(i:i)
+      end select
+    enddo
+  end function html_escape
+
+  ! Turns value into a URL path that cannot change the scheme or host of
+  ! prefix // value: it must start with '/' (added when missing, unless prefix
+  ! already ends in '/'), cannot start with '//' when it begins the URL, and
+  ! every byte outside the RFC 3986 path/query/fragment set is percent-encoded
+  ! (including '\', which browsers treat as '/').
+  function url_path_escape(prefix, value) result(escaped)
+    character(len=*), intent(in)  :: prefix, value
+    character(len=:), allocatable :: escaped, path
+    character(len=*), parameter   :: SAFE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz' // &
+      "0123456789-._~/?#[]@!$&'()*+,;=:%"
+    character(len=*), parameter   :: HEX = '0123456789ABCDEF'
+    integer                       :: i, c, n
+
+    n = len_trim(prefix)
+    path = value
+    if (n == 0) then
+      do while (len(path) >= 2)
+        if (path(1:2) /= '//') exit
+        path = path(2:)
+      enddo
+      if (len(path) == 0) then
+        path = '/'
+      else if (path(1:1) /= '/') then
+        path = '/' // path
+      endif
+    else if (prefix(n:n) /= '/') then
+      if (len(path) == 0) then
+        path = '/'
+      else if (path(1:1) /= '/') then
+        path = '/' // path
+      endif
+    endif
+
+    escaped = ''
+    do i = 1, len(path)
+      if (index(SAFE, path(i:i)) > 0) then
+        escaped = escaped // path(i:i)
+      else
+        c = iachar(path(i:i))
+        escaped = escaped // '%' // HEX(c / 16 + 1:c / 16 + 1) // HEX(mod(c, 16) + 1:mod(c, 16) + 1)
+      endif
+    enddo
+  end function url_path_escape
 endmodule
