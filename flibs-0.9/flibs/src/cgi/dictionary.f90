@@ -118,6 +118,11 @@ subroutine dict_add_key( dict, key, value )
     type(LIST_DATA)              :: data
     type(LINKED_LIST), pointer   :: elem
 
+    if ( .not. associated(dict) ) then
+        call dict_create( dict, key, value )
+        return
+    endif
+
     elem => dict_get_elem( dict, key )
 
     if ( associated(elem) ) then
@@ -200,6 +205,11 @@ function dict_get_elem( dict, key ) result(elem)
     character(len=*), intent(in) :: key
 
     type(LINKED_LIST), pointer   :: elem
+
+    elem => null()
+    if ( .not. associated(dict) ) then
+        return
+    endif
 
     elem => dict%list
     do while ( associated(elem) )

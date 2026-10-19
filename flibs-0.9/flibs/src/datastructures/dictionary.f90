@@ -56,6 +56,7 @@ private :: dict_hashkey
 
 integer, parameter, private :: hash_size  = 4993
 integer, parameter, private :: multiplier = 31
+integer, parameter, private :: hash_kind  = selected_int_kind(18)
 
 include 'linkedlist.f90'
 
@@ -142,6 +143,11 @@ subroutine dict_add_key( dict, key, value )
     type(LIST_DATA)              :: data
     type(LINKED_LIST), pointer   :: elem
     integer                      :: hash
+
+    if ( .not. associated(dict) ) then
+        call dict_create( dict, key, value )
+        return
+    endif
 
     elem => dict_get_elem( dict, key )
 
@@ -237,6 +243,11 @@ function dict_get_elem( dict, key ) result(elem)
 
     hash = dict_hashkey( trim(key) )
 
+    elem => null()
+    if ( .not. associated(dict) ) then
+        return
+    endif
+
     elem => dict%table(hash)%list
     do while ( associated(elem) )
         if ( elem%data%key .eq. key ) then
@@ -255,15 +266,24 @@ end function dict_get_elem
 integer function dict_hashkey( key )
     character(len=*), intent(in) :: key
 
-    integer                      :: hash
+    integer(kind=hash_kind)      :: hash
     integer                      :: i
 
-    dict_hashkey = 0
+    !
+    ! Reduce at every step in a wide integer: no overflow, and
+    ! modulo (unlike mod) never yields a negative value, so the
+    ! result is always in 1..hash_size (also for an empty key)
+    !
+    hash = 0
 
     do i = 1,len(key)
-        dict_hashkey = multiplier * dict_hashkey + ichar(key(i:i))
+        hash = modulo( multiplier * hash + ichar(key(i:i)), int(hash_size, hash_kind) )
     enddo
 
-    dict_hashkey = 1 + mod( dict_hashkey-1, hash_size )
+    dict_hashkey = 1 + int( hash )
+
+    if ( dict_hashkey < 1 .or. dict_hashkey > hash_size ) then
+        stop 'dict_hashkey: bucket index out of range'
+    endif
 end function dict_hashkey
 
