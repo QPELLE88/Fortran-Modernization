@@ -19,12 +19,22 @@
 #     - You can run programs (URL ends in .exe) that use the simple
 #       protocol exemplified in "cgi.f90" (see also below)
 #
-#     TODO: use cgi-bin/* instead of the extension
+#     Security:
+#     - The path of a URL is percent-decoded and must resolve (symbolic
+#       links included) to a regular file below the root directory.
+#       ".." segments are refused outright (403).
+#     - Tcl scripts and programs (.tcl/.exe) are only run from the
+#       cgi-bin directory below the root; elsewhere they are refused.
+#     - There is no authentication, so by default the server only
+#       listens on 127.0.0.1.
 #
 #     The configuration file can specify:
 #     - root      The root directory of the application (default: startup directory)
 #     - default   The start-up page (default: index.html)
-#     - port      Port to be used (default: 80)
+#     - port      Port to be used (default: 8015)
+#     - address   Address to listen on (default: 127.0.0.1)
+#     - cgibin    Directory, relative to the root, holding the scripts
+#                 and programs that may be run (default: cgi-bin)
 #     - encoding  The encoding of the data sent to the client (default: iso8859-1)
 #
 #     What configuration file:
@@ -80,6 +90,8 @@ set root      [pwd]
 set default   index.html
 set port      8015
 set encoding  iso8859-1
+set address   127.0.0.1
+set cgibin    cgi-bin
 
 # bgerror --
 #     Handle background errors (echo to the screen and to the client)
@@ -110,6 +122,132 @@ proc bgerror msg {
 #
 proc answer {socketChannel host2 port2} {
   fileevent $socketChannel readable [list serve $socketChannel]
+}
+
+# percentDecode --
+#     Decode the %XX escapes (UTF-8) in the path of a URL
+# Arguments:
+#     text      Encoded text
+# Result:
+#     Decoded text
+#
+proc percentDecode {text} {
+    set bytes ""
+    set start 0
+    foreach {match hex} [regexp -all -inline -indices {%([0-9A-Fa-f]{2})} $text] {
+        append bytes [encoding convertto utf-8 \
+            [string range $text $start [expr {[lindex $match 0]-1}]]]
+        append bytes [binary format H2 [string range $text {*}$hex]]
+        set start [expr {[lindex $match 1]+1}]
+    }
+    append bytes [encoding convertto utf-8 [string range $text $start end]]
+    return [encoding convertfrom utf-8 $bytes]
+}
+
+# realPath --
+#     Absolute path with symbolic links resolved in every component
+#     (file normalize leaves the last component alone)
+# Arguments:
+#     path      Path to resolve
+# Result:
+#     Resolved path
+#
+proc realPath {path} {
+    file dirname [file normalize [file join $path __dummy__]]
+}
+
+# isBelow --
+#     Check that a path lies strictly below a directory
+# Arguments:
+#     path      Resolved path
+#     dir       Resolved directory
+# Result:
+#     1 if so, 0 otherwise
+#
+proc isBelow {path dir} {
+    set p [file split $path]
+    set d [file split $dir]
+    set n [llength $d]
+    expr {[llength $p] > $n && [lrange $p 0 [expr {$n-1}]] eq $d}
+}
+
+# resolveUrlPath --
+#     Map the path of a URL onto a file below the root directory
+# Arguments:
+#     tail      Path part of the URL (starts with /)
+# Result:
+#     List of the resolved file name and the action (static, tcl or
+#     exe), or "" if the request is not allowed
+#
+proc resolveUrlPath {tail} {
+    set path [percentDecode $tail]
+    if {[string match */ $path]} {
+        append path $::default
+    }
+    if {[regexp {[\x00-\x1f\x7f\\]} $path]} {
+        return ""
+    }
+
+    set parts {}
+    foreach part [split $path /] {
+        if {$part eq "" || $part eq "."} {
+            continue
+        }
+        if {$part eq ".." || [string match ~* $part]} {
+            return ""
+        }
+        lappend parts $part
+    }
+    if {[llength $parts] == 0} {
+        return ""
+    }
+
+    set root [realPath $::root]
+    set name [realPath [file join $root {*}$parts]]
+    if {![isBelow $name $root]} {
+        return ""
+    }
+
+    #
+    # A symbolic link may not turn a static file into a script/program
+    # or the other way around
+    #
+    set requested [file extension [lindex $parts end]]
+    set target    [file extension $name]
+    if {$requested ne $target && ($requested in {.tcl .exe} || $target in {.tcl .exe})} {
+        return ""
+    }
+
+    switch -- $target {
+        .tcl    {set action tcl}
+        .exe    {set action exe}
+        default {return [list $name static]}
+    }
+    set cgibin [realPath [file join $root $::cgibin]]
+    if {![isBelow $cgibin $root] && $cgibin ne $root} {
+        return ""
+    }
+    if {![isBelow $name $cgibin]} {
+        return ""
+    }
+    return [list $name $action]
+}
+
+# forbidden --
+#     Refuse the request
+# Arguments:
+#     sock      Channel for the socket
+# Result:
+#     None
+#
+proc forbidden {sock} {
+    puts $sock "HTTP/1.0 403 Forbidden"
+    puts $sock "Content-Type: text/html;charset=$::encoding\n"
+    puts $sock "<html><head><title>Forbidden</title></head>"
+    puts $sock "<body><center>"
+    puts $sock "Access to the URL you requested is not allowed."
+    puts $sock "</center></body></html>"
+    close $sock
 }
 
 # serve --
@@ -146,9 +284,14 @@ proc serve sock {
     fileevent $sock readable ""
     set tail /
     regexp {(/[^ ?]*)(\?[^ ]*)?} $line -> tail args
-    if {[string match */ $tail]} {append tail $::default}
-    set name [string map {%20 " "} $::root$tail]
+    set resolved [resolveUrlPath $tail]
     set args [string range $args 1 end]
+    if {$resolved eq ""} {
+        puts "URL $tail refused"
+        forbidden $sock
+        return
+    }
+    lassign $resolved name action
 
     #
     # The URL must be an existing file:
@@ -159,12 +302,12 @@ proc serve sock {
     #
     set exe 0
     set perm r
-    if {[file readable $name]} {
+    if {[file isfile $name] && [file readable $name]} {
         puts $sock "HTTP/1.0 200 OK"
-        if {[file extension $name] eq ".tcl"} {
+        if {$action eq "tcl"} {
             set ::env(QUERY_STRING) [string range $args 1 end]
             set name [list |tclsh $name]
-        } elseif {[file extension $name] eq ".exe"} {
+        } elseif {$action eq "exe"} {
             set exe  1
             set perm w+
             set name [list |$name]
@@ -266,8 +409,8 @@ if { $cfg >= 0 } {
 }
 
 if { [file readable $cfgfile] } {
-    puts "Using configuration file $cgfile"
-    source $cgifile
+    puts "Using configuration file $cfgfile"
+    source $cfgfile
 }   else {
     puts "Using default configuration"
 }
@@ -279,7 +422,7 @@ if { ! [file readable [file join $root $default]] } {
     puts "Error: could not find startup file/URL -  [file join $root $default]"
     puts "Stopping server"
 } else {
-    socket -server answer $port
+    socket -server answer -myaddr $address $port
     puts "Server ready..."
     vwait forever
 }
