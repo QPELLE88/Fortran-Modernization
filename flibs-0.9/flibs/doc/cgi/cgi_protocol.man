@@ -154,7 +154,8 @@ recorded in the session directory.
 [nl]
 If no session directory is set, /dev/urandom cannot be read, the ID
 cannot be recorded, or [term value] is shorter than 32 characters,
-[term value] is set to blanks.
+[term value] is set to blanks, and any "sessionid" in the dictionary that
+this server did not issue is blanked.
 [nl]
 Limits: this helper only issues and recognises IDs. It does not expire
 them, bind them to a user, or authenticate anyone, and an issued ID can
