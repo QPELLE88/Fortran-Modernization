@@ -158,10 +158,9 @@ proc realPath {path} {
 # Arguments:
 #     tail      Path part of the URL (starts with /)
 # Result:
-#     List of the resolved file name and the extension of the requested
-#     name (which decides how the file is handled, even if the resolved
-#     file is a symbolic link with a different extension), or "" if the
-#     path is not allowed
+#     List of the resolved file name and its extension, or "" if the
+#     path is not allowed (a symbolic link may not change whether the
+#     file is a script/program or a static file)
 #
 proc resolveUrlPath {tail} {
     set path [percentDecode $tail]
@@ -193,7 +192,12 @@ proc resolveUrlPath {tail} {
     if {[llength $split] <= $n || [lrange $split 0 [expr {$n-1}]] ne $root} {
         return ""
     }
-    return [list $name [file extension [lindex $parts end]]]
+    set requested [string tolower [file extension [lindex $parts end]]]
+    set target    [string tolower [file extension $name]]
+    if {$requested ne $target && ($requested in {.tcl .exe} || $target in {.tcl .exe})} {
+        return ""
+    }
+    return [list $name $requested]
 }
 
 # forbidden --
