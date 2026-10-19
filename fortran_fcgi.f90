@@ -31,10 +31,10 @@ program test_fcgi
         ! build dictionary from GET or POST data, environment variables
         call fcgip_make_dictionary( dict, unitNo )
 
-        ! give dictionary to the user supplied routine
+        ! give dictionary to the user supplied routine, unless the request was refused
         ! routine writes the response to unitNo
         ! routine sets stopped to true to terminate program
-        call respond(dict, unitNo, stopped)
+        if (.not. fcgip_request_rejected()) call respond(dict, unitNo, stopped)
 
         ! copy file unitNo to the webserver
         call fcgip_put_file( unitNo, 'text/html' )
