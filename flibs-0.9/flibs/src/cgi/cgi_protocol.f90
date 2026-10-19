@@ -530,7 +530,8 @@ end subroutine cgi_get_session
 ! cgi_new_session --
 !     Issue a new session ID, replacing any "sessionid" in the dictionary
 !     (an issued ID found there is always revoked, even if no new ID can
-!     be issued, so a planted ID cannot survive a failed rotation)
+!     be issued, so a planted ID cannot survive a failed rotation; if it
+!     cannot be revoked, no new ID is issued and value is blank)
 ! Arguments:
 !     dict          Dictionary with values
 !     value         New session ID (blank on failure, see cgi_get_session)
@@ -549,9 +550,12 @@ subroutine cgi_new_session( dict, value )
     if ( associated(dict) ) then
         if ( dict_has_key( dict, "sessionid" ) ) then
             data = dict_get_key( dict, "sessionid" )
-            call cgi_revoke_session( data%value )
+            call cgi_revoke_session( data%value, ok )
             data%value = ' '
             call dict_add_key( dict, "sessionid", data )
+            if ( .not. ok ) then
+                return
+            endif
         endif
     endif
 
@@ -589,26 +593,30 @@ end subroutine cgi_new_session
 !     Remove the record of an issued session ID, so it is no longer accepted
 ! Arguments:
 !     id            Session ID to revoke (ignored if it was not issued)
+!     ok            False if the ID is still accepted afterwards
 !
-subroutine cgi_revoke_session( id )
+subroutine cgi_revoke_session( id, ok )
     character(len=*), intent(in) :: id
+    logical, intent(out)         :: ok
 
     integer :: lu
     integer :: ierr
 
+    ok = .true.
     if ( .not. cgi_session_is_issued( id ) ) then
         return
     endif
 
     lu = cgi_free_unit()
-    if ( lu < 0 ) then
-        return
+    if ( lu >= 0 ) then
+        open( lu, file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
+            status = 'old', action = 'read', iostat = ierr )
+        if ( ierr == 0 ) then
+            close( lu, status = 'delete', iostat = ierr )
+        endif
     endif
-    open( lu, file = trim(session_dir) // '/' // id(1:SESSION_ID_LENGTH), &
-        status = 'old', iostat = ierr )
-    if ( ierr == 0 ) then
-        close( lu, status = 'delete', iostat = ierr )
-    endif
+
+    ok = .not. cgi_session_is_issued( id )
 
 end subroutine cgi_revoke_session
 

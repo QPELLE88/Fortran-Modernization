@@ -239,7 +239,8 @@ The unique session ID (at least 32 characters)
 Always issue a new session ID (as described for <em>cgi_get_session</em>)
 and store it as &quot;sessionid&quot; in the dictionary. An issued ID already
 stored there is revoked (its file is removed), even if no new ID can be
-issued, so it is no longer accepted.
+issued, so it is no longer accepted. If that file cannot be removed, no
+new ID is issued and value is blank: treat this as a failed rotation.
 <br><br>
 <dl>
 <dt>type(DICT_STRUCT), pointer <i class='arg'>dict</i><dd>
