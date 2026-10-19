@@ -42,7 +42,7 @@ module marsupial
     call string_replace(query, "'", "''")
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE INSTR(LOWER(name), LOWER('" // trim(query) // "')) LIMIT 4")
     if (sqlite3_error(db)) then
-      call releaseStatement()
+      call releaseRequest()
       return
     endif
 
@@ -58,7 +58,7 @@ module marsupial
       exit
     end do
 
-    call releaseStatement()
+    call releaseRequest()
   endsubroutine
 
   subroutine getAllMarsupials(name, latinName, wikiLink, description)
@@ -72,7 +72,7 @@ module marsupial
 
     call sqlite3_prepare_select( db, 'marsupials', column, stmt, "WHERE 1=1 LIMIT 8")
     if (sqlite3_error(db)) then
-      call releaseStatement()
+      call releaseRequest()
       return
     endif
 
@@ -89,19 +89,19 @@ module marsupial
       if (i > size(name)) exit
     end do
 
-    call releaseStatement()
+    call releaseRequest()
   endsubroutine
 
-  ! The FastCGI worker is long-lived: open the database once and reuse it.
+  ! Opened per request (so a replaced database file is picked up) and always
+  ! closed again by releaseRequest, since the FastCGI worker is long-lived.
   logical function openDatabase()
-    if (.not. dbOpen) then
-      call sqlite3_open('marsupials.sqlite3', db)
-      if (sqlite3_error(db)) then
-        ! the C wrapper already closed the failed handle; retry on the next request
-        db%db_handle = 0
-      else
-        dbOpen = .true.
-      endif
+    call closeDatabase()
+    call sqlite3_open('marsupials.sqlite3', db)
+    if (sqlite3_error(db)) then
+      ! the C wrapper already closed the failed handle
+      db%db_handle = 0
+    else
+      dbOpen = .true.
     endif
     openDatabase = dbOpen
   endfunction
@@ -115,11 +115,12 @@ module marsupial
     call sqlite3_column_query( column(4), 'description', SQLITE_CHAR )
   endsubroutine
 
-  ! Finalize the per-request statement (releasing its read lock) and free the columns.
-  subroutine releaseStatement()
+  ! Finalize the statement (releasing its read lock), free the columns and close the database.
+  subroutine releaseRequest()
     call sqlite3_finalize(stmt)
     if (associated(column)) deallocate(column)
     nullify(column)
+    call closeDatabase()
   endsubroutine
 
   subroutine closeDatabase()
