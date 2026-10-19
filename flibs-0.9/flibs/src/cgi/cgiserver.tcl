@@ -23,8 +23,9 @@
 #
 #     Security:
 #     - URLs are percent-decoded and must resolve (symbolic links
-#       included) to a regular file below the root directory, otherwise
-#       the request is refused with 403. ".." segments are refused.
+#       included) to a path below the root directory, otherwise the
+#       request is refused with 403. ".." segments are refused. Only
+#       regular files are served; anything else gives 404.
 #     - There is no authentication: by default the server only listens
 #       on 127.0.0.1. Do not expose it to other hosts.
 #
