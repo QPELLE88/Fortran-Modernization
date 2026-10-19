@@ -38,7 +38,7 @@ cgi_protocol.o: $(FLIBS)/cgi/cgi_protocol.f90
 	$(FORTRAN) -c $<
 
 fcgi_protocol.o: $(FLIBS)/cgi/fcgi_protocol.f90
-	$(FORTRAN) -c $<
+	$(FORTRAN) -fcheck=bounds -c $<
 
 csqlite.o: $(FLIBS)/sqlite/csqlite.c
 	cd $(FLIBS)/sqlite && make csqlite.o >/dev/null
