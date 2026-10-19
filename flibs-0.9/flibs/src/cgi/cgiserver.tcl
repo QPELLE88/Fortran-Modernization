@@ -158,7 +158,10 @@ proc realPath {path} {
 # Arguments:
 #     tail      Path part of the URL (starts with /)
 # Result:
-#     Resolved file name, or "" if the path is not allowed
+#     List of the resolved file name and the extension of the requested
+#     name (which decides how the file is handled, even if the resolved
+#     file is a symbolic link with a different extension), or "" if the
+#     path is not allowed
 #
 proc resolveUrlPath {tail} {
     set path [percentDecode $tail]
@@ -190,7 +193,7 @@ proc resolveUrlPath {tail} {
     if {[llength $split] <= $n || [lrange $split 0 [expr {$n-1}]] ne $root} {
         return ""
     }
-    return $name
+    return [list $name [file extension [lindex $parts end]]]
 }
 
 # forbidden --
@@ -244,13 +247,14 @@ proc serve sock {
     fileevent $sock readable ""
     set tail /
     regexp {(/[^ ?]*)(\?[^ ]*)?} $line -> tail args
-    set name [resolveUrlPath $tail]
+    set resolved [resolveUrlPath $tail]
     set args [string range $args 1 end]
-    if {$name eq ""} {
+    if {$resolved eq ""} {
         puts "URL $tail refused"
         forbidden $sock
         return
     }
+    lassign $resolved name extension
 
     #
     # The URL must be an existing file:
@@ -263,10 +267,10 @@ proc serve sock {
     set perm r
     if {[file isfile $name] && [file readable $name]} {
         puts $sock "HTTP/1.0 200 OK"
-        if {[file extension $name] eq ".tcl"} {
+        if {$extension eq ".tcl"} {
             set ::env(QUERY_STRING) [string range $args 1 end]
             set name [list |tclsh $name]
-        } elseif {[file extension $name] eq ".exe"} {
+        } elseif {$extension eq ".exe"} {
             set exe  1
             set perm w+
             set name [list |$name]
